@@ -49,8 +49,7 @@ _TIER_SHAPES = {
     },
 }
 
-# Per-scenario tier assignment for the five campaign templates, in template
-# order. This is what makes each preset tell a different story.
+# Per-scenario tier assignment for the five campaign templates, in template order.
 _SCENARIO_TIERS = {
     "growth_and_fatigue": ["TOP_PERFORMER", "STABLE", "DECAYING", "TOP_PERFORMER", "STABLE"],
     "sebi_risk_scenario": ["TOP_PERFORMER", "STABLE", "DECAYING", "TOP_PERFORMER", "STABLE"],
@@ -497,3 +496,52 @@ def load_synthetic_history(lookback_days: int = 30) -> list[HistoryPeriod]:
         return periods
     finally:
         conn.close()
+
+
+def load_synthetic_daily_trends(lookback_days: int = 30) -> list[dict[str, Any]]:
+    """Query daily aggregated metrics across all campaigns for data visualization."""
+    init_synthetic_schema()
+    conn = _ensure_seeded(get_db_connection(), days=lookback_days)
+    try:
+        today = date.today()
+        cutoff = today - timedelta(days=lookback_days)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                date,
+                SUM(spend) as total_spend,
+                SUM(impressions) as total_impressions,
+                SUM(clicks) as total_clicks,
+                SUM(conversions) as total_conversions,
+                SUM(conversion_value) as total_value,
+                ROUND(AVG(ctr), 2) as avg_ctr,
+                ROUND(AVG(cpc), 2) as avg_cpc
+            FROM synthetic_daily_metrics
+            WHERE date BETWEEN ? AND ?
+            GROUP BY date
+            ORDER BY date ASC
+            """,
+            (cutoff.isoformat(), today.isoformat()),
+        )
+        trends = []
+        for r in cur.fetchall():
+            spend = float(r["total_spend"] or 0.0)
+            val = float(r["total_value"] or 0.0)
+            convs = int(r["total_conversions"] or 0)
+            trends.append(
+                {
+                    "date": r["date"],
+                    "spend": round(spend, 2),
+                    "impressions": int(r["total_impressions"] or 0),
+                    "clicks": int(r["total_clicks"] or 0),
+                    "conversions": convs,
+                    "roas": round(val / spend, 2) if spend > 0 else 0.0,
+                    "cpa": round(spend / convs, 2) if convs > 0 else 0.0,
+                    "ctr": float(r["avg_ctr"] or 0.0),
+                }
+            )
+        return trends
+    finally:
+        conn.close()
+

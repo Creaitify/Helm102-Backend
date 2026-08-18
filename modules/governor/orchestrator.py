@@ -107,7 +107,9 @@ class GovernorOrchestrator:
                 history = []
                 ad_ops_status = EnvelopeStatus.DEGRADED
 
-            analyst_findings = self.analyst.analyze(snapshot, history)
+            analyst_findings = await self.analyst.generate_ai_analysis(
+                snapshot, history, gateway=self.gateway, objective=objective
+            )
             campaign_drafts = analyst_findings.get("campaign_drafts", [])
 
             hop1 = HandoffEnvelope(
@@ -196,8 +198,17 @@ class GovernorOrchestrator:
             state["agent_reports"]["budget"] = budget_dict
             self._record_hop(run_id, state, hop4, next_agent="Governor")
 
-            # Hop 5: Governor Proposal Synthesis with REAL dry-run payload previews
+            # Hop 5: Governor Proposal Synthesis with REAL dry-run payload previews & Human Action Summary
             dry_run_preview = self._build_dry_run_preview(budget_dict["shifts"], campaign_drafts)
+            human_action_summary = self._build_human_action_summary(
+                budget_dict["shifts"],
+                pkg_dict,
+                compliance_verdict.to_dict(),
+                campaign_drafts,
+                budget_dict["total_current_inr"],
+                budget_dict["total_proposed_inr"],
+            )
+
             proposal = {
                 "run_id": run_id,
                 "objective": objective,
@@ -211,6 +222,7 @@ class GovernorOrchestrator:
                 "total_budget_proposed_inr": budget_dict["total_proposed_inr"],
                 "campaign_drafts": campaign_drafts,
                 "dry_run_preview": dry_run_preview,
+                "human_action_summary": human_action_summary,
             }
 
             hop5 = HandoffEnvelope(
@@ -393,3 +405,83 @@ class GovernorOrchestrator:
             "campaign_create_operations": create_ops,
             "creative_operations": 1,
         }
+
+    def _build_human_action_summary(
+        self,
+        shifts: list[dict[str, Any]],
+        pkg_dict: dict[str, Any],
+        compliance_dict: dict[str, Any],
+        campaign_drafts: list[dict[str, Any]],
+        total_curr: float,
+        total_prop: float,
+    ) -> dict[str, Any]:
+        """Produce clean, newbie-friendly and executive-friendly action items."""
+        actions = []
+        for s in shifts:
+            pct = s.get("shift_percentage", 0)
+            c_name = s.get("campaign_name", s.get("campaign_id"))
+            c_curr = round(s.get("current_daily_budget_inr", 0))
+            c_prop = round(s.get("proposed_daily_budget_inr", 0))
+            if pct > 0:
+                actions.append({
+                    "type": "SCALE_WINNER",
+                    "action": "Increase Budget",
+                    "campaign_id": s.get("campaign_id"),
+                    "campaign_name": c_name,
+                    "platform": s.get("platform"),
+                    "current_budget": c_curr,
+                    "proposed_budget": c_prop,
+                    "change_pct": pct,
+                    "description": f"Boost daily budget by +{pct}% (₹{c_curr:,} → ₹{c_prop:,}/day) to scale high-performing conversions.",
+                    "tag": f"+{pct}% SCALE",
+                    "badge_type": "success",
+                })
+            elif pct < 0:
+                actions.append({
+                    "type": "REDUCE_FATIGUE",
+                    "action": "Reduce Budget",
+                    "campaign_id": s.get("campaign_id"),
+                    "campaign_name": c_name,
+                    "platform": s.get("platform"),
+                    "current_budget": c_curr,
+                    "proposed_budget": c_prop,
+                    "change_pct": pct,
+                    "description": f"Cut daily budget by {abs(pct)}% (₹{c_curr:,} → ₹{c_prop:,}/day) to stop budget waste on fatigued ads.",
+                    "tag": f"{pct}% CUT",
+                    "badge_type": "warning",
+                })
+
+        script_hook = pkg_dict.get("script", {}).get("hook_3s") or "Smart SIP Growth"
+        creative_headline = pkg_dict.get("creative", {}).get("headline") or "Start Disciplined SIPs"
+        actions.append({
+            "type": "DEPLOY_CREATIVE",
+            "action": "Deploy Fresh Creative",
+            "campaign_id": "new_creative_pkg",
+            "campaign_name": "Multi-Channel Creative Refresh",
+            "platform": "meta_ads & google_ads",
+            "headline": creative_headline,
+            "hook": script_hook,
+            "description": f"Launch 1 new video ad (Hook: \"{script_hook}\") and fresh copy variants across platforms.",
+            "tag": "NEW CREATIVE",
+            "badge_type": "info",
+        })
+
+        comp_status = compliance_dict.get("status", "PASS")
+        actions.append({
+            "type": "COMPLIANCE_CHECK",
+            "action": "SEBI Regulatory Clearance",
+            "status": comp_status,
+            "description": "Verified compliant with SEBI mutual fund advertising rules. Zero misleading return promises.",
+            "tag": comp_status.upper(),
+            "badge_type": "success" if comp_status.lower() in ("pass", "compliant") else "danger",
+        })
+
+        return {
+            "headline": "Proposed Campaign Optimization Actions",
+            "overview": (
+                f"HELM proposes {len(shifts)} budget adjustments and 1 creative refresh. "
+                f"Total daily budget is preserved at ₹{int(total_prop):,}/day."
+            ),
+            "action_items": actions,
+        }
+

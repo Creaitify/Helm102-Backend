@@ -76,13 +76,15 @@ class GeminiAdapter:
 
         url = f"{_GEMINI_BASE_URL}/{model_name}:generateContent?key={self.api_key}"
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             try:
                 resp = await client.post(
                     url,
                     json=payload,
                     headers={"Content-Type": "application/json"},
                 )
+            except httpx.TimeoutException as exc:
+                raise AdapterError(f"Gemini API call timed out (15s limit): {exc}") from exc
             except Exception as exc:
                 raise AdapterError(f"Gemini HTTP connection failed: {exc}") from exc
 

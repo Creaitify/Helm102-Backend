@@ -23,6 +23,7 @@ export function GovernorWorkspace() {
     currentRunState,
     recentRuns,
     loadRun,
+    clearActiveRun,
     setActiveTab,
     resolveApproval,
     liveMode,
@@ -153,18 +154,30 @@ export function GovernorWorkspace() {
             </button>
           </div>
 
-          <div className="form-actions" style={{ marginTop: '1rem' }}>
+          <div className="form-actions" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
             <button
               type="submit"
               disabled={isOrchestrating}
               className="btn btn-primary"
-              style={{ width: '100%' }}
+              style={{ flex: 1 }}
             >
               <Play style={{ width: 16, height: 16 }} />
               <span className="btn-text">
-                {isOrchestrating ? 'Governor Orchestrating...' : 'Launch Governor Orchestration'}
+                {isOrchestrating ? 'Governor Orchestrating...' : 'Launch Governor Mission'}
               </span>
             </button>
+
+            {currentRunState && (
+              <button
+                type="button"
+                onClick={clearActiveRun}
+                className="btn btn-secondary"
+                style={{ padding: '0.6rem 0.9rem' }}
+                title="Reset active run"
+              >
+                Reset
+              </button>
+            )}
           </div>
         </form>
 

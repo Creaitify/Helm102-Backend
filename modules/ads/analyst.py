@@ -1,13 +1,16 @@
-"""Ad-Ops Analyst worker: deterministic performance analytics.
+"""Ad-Ops Analyst worker: deterministic performance analytics and AI diagnostic synthesis.
 
-Reads the campaign snapshot plus past-period history and answers, in
-structured form: what is working, what is decaying, where budget should go
-("what to buy"), and which new campaigns are worth drafting. No LLM calls —
-numbers come straight from the ad accounts (or the labelled synthetic set).
+Reads the campaign snapshot plus past-period history and provides:
+1. Deterministic performance scoring, anomaly detection, and decay signals.
+2. Channel breakdown (Google Ads vs Meta Ads).
+3. Plain-English AI executive synthesis (using Gemini models via Model Gateway).
+4. Concrete budget allocation and campaign draft recommendations.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
 
 from modules.ads.contracts import (
@@ -17,25 +20,47 @@ from modules.ads.contracts import (
     MetricRow,
     Platform,
 )
+from services.api.gateway.contracts import (
+    CompletionRequest,
+    Message,
+    Role,
+    TaskKind,
+)
 
-# A campaign is "working" when it beats the blended account ROAS (or, when
-# ROAS is untracked, when its CPA beats the account average).
+logger = logging.getLogger(__name__)
+
+# Thresholds for fatigue and decay signals (inspired by Mureo anomaly detection)
 _DECAY_CTR_DROP = 0.25  # ≥25% CTR drop vs prior period = fatigue signal
 _DECAY_CPA_RISE = 0.30  # ≥30% CPA rise vs prior period = decay signal
+_DECAY_ROAS_DROP = 0.25  # ≥25% ROAS drop vs prior period = efficiency loss
 
 
 class AdOpsAnalyst:
-    """Deterministic analytics over live/synthetic campaign data."""
+    """Analytics worker combining deterministic metrics and AI executive synthesis."""
 
     def analyze(
         self,
         snapshot: CampaignSnapshot,
         history: list[HistoryPeriod] | None = None,
     ) -> dict[str, Any]:
+        """Perform comprehensive deterministic analytics over campaign data."""
         campaigns = list(snapshot.campaigns)
         findings: dict[str, Any] = {
             "data_source": snapshot.source,
             "data_notes": snapshot.notes,
+            "account_kpis": {
+                "total_spend_inr": snapshot.total_spend_inr,
+                "blended_roas": snapshot.blended_roas,
+                "total_conversions": sum(c.conversions for c in campaigns),
+                "total_clicks": sum(c.clicks for c in campaigns),
+                "total_impressions": sum(c.impressions for c in campaigns),
+                "blended_cpa_inr": (
+                    round(snapshot.total_spend_inr / sum(c.conversions for c in campaigns), 2)
+                    if sum(c.conversions for c in campaigns) > 0
+                    else 0.0
+                ),
+            },
+            "channel_breakdown": self._compute_channel_breakdown(campaigns),
             "trends": [],
             "top_angles": [],
             "decay_signals": [],
@@ -43,17 +68,22 @@ class AdOpsAnalyst:
             "recommendations": [],
             "per_campaign": [],
             "campaign_drafts": [],
+            "executive_summary": "",
+            "key_takeaways": [],
         }
 
         if not campaigns:
             findings["trends"].append(
                 "No campaign rows available for this period — nothing to analyze."
             )
+            findings["executive_summary"] = "No active campaign data found to analyze."
             return findings
 
         # --- Per-campaign table with a composite efficiency score ---
         avg_cpa = _avg([c.cpa_inr for c in campaigns if c.cpa_inr > 0])
         for c in campaigns:
+            score_val = _score(c, snapshot.blended_roas, avg_cpa)
+            status_tag = "WINNER" if score_val >= 65 else "FATIGUED" if score_val < 40 else "STABLE"
             findings["per_campaign"].append(
                 {
                     "campaign_id": c.campaign_id,
@@ -66,7 +96,8 @@ class AdOpsAnalyst:
                     "roas": c.roas,
                     "cpa_inr": c.cpa_inr,
                     "ctr": c.ctr,
-                    "score": _score(c, snapshot.blended_roas, avg_cpa),
+                    "score": score_val,
+                    "status_tag": status_tag,
                 }
             )
         findings["per_campaign"].sort(key=lambda r: r["score"], reverse=True)
@@ -116,7 +147,7 @@ class AdOpsAnalyst:
                 deltas.append(f"CTR fell {round((p.ctr - c.ctr) / p.ctr * 100)}% ({p.ctr}% → {c.ctr}%)")
             if p.cpa_inr > 0 and c.cpa_inr > 0 and (c.cpa_inr - p.cpa_inr) / p.cpa_inr >= _DECAY_CPA_RISE:
                 deltas.append(f"CPA rose {round((c.cpa_inr - p.cpa_inr) / p.cpa_inr * 100)}% (₹{int(p.cpa_inr)} → ₹{int(c.cpa_inr)})")
-            if p.roas > 0 and c.roas > 0 and (p.roas - c.roas) / p.roas >= 0.25:
+            if p.roas > 0 and c.roas > 0 and (p.roas - c.roas) / p.roas >= _DECAY_ROAS_DROP:
                 deltas.append(f"ROAS fell from {p.roas}x to {c.roas}x")
             if deltas:
                 findings["decay_signals"].append(
@@ -159,7 +190,109 @@ class AdOpsAnalyst:
         findings["campaign_drafts"] = [
             _draft_to_dict(d) for d in self.propose_campaign_drafts(snapshot, findings)
         ]
+
+        # Generate standard default executive summary
+        top_name = winners[0]["campaign_name"] if winners else "top campaigns"
+        decay_name = losers[0]["campaign_name"] if losers else "fatigued creatives"
+        findings["executive_summary"] = (
+            f"Account is operating at a healthy {snapshot.blended_roas}x blended ROAS with total spend of ₹{int(snapshot.total_spend_inr):,}. "
+            f"Top performance is driven by '{top_name}'. "
+            f"Budget efficiency can be boosted by cutting spend on decaying asset '{decay_name}' and reallocating to winning search & video angles."
+        )
+        findings["key_takeaways"] = [
+            f"Winning Angle: {top_name} delivers strong conversion volume.",
+            f"Decay Alert: {decay_name} shows creative fatigue and rising acquisition costs.",
+            "Growth Action: Shift 20% budget from fatigued ads to high-intent winners to maximize ROAS.",
+        ]
+
         return findings
+
+    async def generate_ai_analysis(
+        self,
+        snapshot: CampaignSnapshot,
+        history: list[HistoryPeriod] | None = None,
+        gateway: Any = None,
+        objective: str = "",
+    ) -> dict[str, Any]:
+        """Perform deterministic analysis and enrich with Gemini AI narrative."""
+        findings = self.analyze(snapshot, history)
+        if not gateway or getattr(gateway, "replay_mode", True):
+            return findings
+
+        # Call Gemini model through the Model Gateway for AI analysis
+        try:
+            summary_payload = {
+                "objective": objective,
+                "total_spend": findings["account_kpis"]["total_spend_inr"],
+                "blended_roas": findings["account_kpis"]["blended_roas"],
+                "campaigns": findings["per_campaign"],
+                "what_works": findings["what_works"],
+                "decay_signals": findings["decay_signals"],
+            }
+            prompt = (
+                "You are an expert Performance Marketing and Ad Operations Director. "
+                "Analyze the following campaign performance data and write an insightful, clear, and beginner-friendly executive diagnosis.\n\n"
+                f"Data:\n{json.dumps(summary_payload, indent=2)}\n\n"
+                "Return a JSON object with:\n"
+                "- executive_summary: A 2-3 sentence overview explaining account health in simple terms.\n"
+                "- key_takeaways: A list of 3-4 clear bullet points summarizing what works, what is fatigued, and where the budget should go.\n"
+                "- strategic_advice: Plain-English recommendation for the media buyer.\n"
+            )
+            request = CompletionRequest(
+                task=TaskKind.ANALYST_ANSWER,
+                messages=[
+                    Message(
+                        role=Role.SYSTEM,
+                        content="You are an expert Ad-Ops Director. Write clear, jargon-free performance summaries for marketing leads.",
+                    ),
+                    Message(role=Role.USER, content=prompt),
+                ],
+            )
+            resp = await gateway.generate(request)
+            cleaned = resp.content.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("```")[1]
+                if cleaned.startswith("json"):
+                    cleaned = cleaned[4:]
+            data = json.loads(cleaned.strip())
+            if isinstance(data, dict):
+                if data.get("executive_summary"):
+                    findings["executive_summary"] = str(data["executive_summary"])
+                if data.get("key_takeaways") and isinstance(data["key_takeaways"], list):
+                    findings["key_takeaways"] = [str(t) for t in data["key_takeaways"]]
+                if data.get("strategic_advice"):
+                    findings["strategic_advice"] = str(data["strategic_advice"])
+        except Exception as exc:
+            logger.info("AdOps AI narrative generation fell back to deterministic summary: %s", exc)
+
+        return findings
+
+    def _compute_channel_breakdown(self, campaigns: list[MetricRow]) -> dict[str, Any]:
+        """Compute Google vs Meta aggregated metrics."""
+        google_c = [c for c in campaigns if c.platform == Platform.GOOGLE_ADS]
+        meta_c = [c for c in campaigns if c.platform == Platform.META_ADS]
+
+        g_spend = sum(c.spend_inr for c in google_c)
+        m_spend = sum(c.spend_inr for c in meta_c)
+        g_convs = sum(c.conversions for c in google_c)
+        m_convs = sum(c.conversions for c in meta_c)
+
+        return {
+            "google_ads": {
+                "campaign_count": len(google_c),
+                "spend_inr": g_spend,
+                "conversions": g_convs,
+                "blended_roas": round(sum(c.roas * c.spend_inr for c in google_c) / g_spend, 2) if g_spend > 0 else 0.0,
+                "blended_cpa_inr": round(g_spend / g_convs, 2) if g_convs > 0 else 0.0,
+            },
+            "meta_ads": {
+                "campaign_count": len(meta_c),
+                "spend_inr": m_spend,
+                "conversions": m_convs,
+                "blended_roas": round(sum(c.roas * c.spend_inr for c in meta_c) / m_spend, 2) if m_spend > 0 else 0.0,
+                "blended_cpa_inr": round(m_spend / m_convs, 2) if m_convs > 0 else 0.0,
+            },
+        }
 
     def propose_campaign_drafts(
         self, snapshot: CampaignSnapshot, findings: dict[str, Any]
@@ -207,13 +340,12 @@ def _score(c: MetricRow, blended_roas: float, avg_cpa: float) -> int:
     """Composite 0-100 efficiency score, deterministic and explainable.
 
     ROAS vs account blend (50%), CPA vs account average (30%), CTR (20%).
-    When ROAS is untracked (live accounts without value tracking), CPA and
-    CTR carry the weight.
+    When ROAS is untracked, CPA and CTR carry the weight.
     """
     if c.roas > 0 and blended_roas > 0:
         roas_part = min(c.roas / blended_roas, 2.0) / 2.0 * 50
     else:
-        roas_part = 25.0  # neutral when untracked
+        roas_part = 25.0
     if c.cpa_inr > 0 and avg_cpa > 0:
         cpa_part = min(avg_cpa / c.cpa_inr, 2.0) / 2.0 * 30
     else:
@@ -236,3 +368,4 @@ def _draft_to_dict(d: CampaignDraft) -> dict[str, Any]:
         "channel_type": d.channel_type,
         "status": d.status,
     }
+

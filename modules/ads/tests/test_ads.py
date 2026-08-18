@@ -81,6 +81,9 @@ def test_create_campaign_dry_run_previews_exact_payload():
 
 
 def test_analyst_findings_and_drafts():
+    from services.api.db.synthetic_sqlite import generate_synthetic_scenario
+    generate_synthetic_scenario("growth_and_fatigue", days=60)
+
     connector = _unconnected()
     snapshot = connector.fetch_campaigns()
     history = connector.fetch_history()

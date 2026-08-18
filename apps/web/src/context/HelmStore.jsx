@@ -251,6 +251,32 @@ export function HelmStoreProvider({ children }) {
     [currentRunId, fetchRecentRuns]
   );
 
+  const switchModel = useCallback(
+    async (provider, model) => {
+      try {
+        const res = await fetch(`${API_BASE}/api/provider/switch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, model }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await fetchHealth();
+      } catch (err) {
+        alert(`Model switch failed: ${err.message}`);
+      }
+    },
+    [fetchHealth]
+  );
+
+  const clearActiveRun = useCallback(() => {
+    stopLiveStream();
+    setCurrentRunId(null);
+    setCurrentRunState(null);
+    localStorage.removeItem('helm_active_run_id');
+    localStorage.removeItem('helm_active_run_state');
+    setIsOrchestrating(false);
+  }, [stopLiveStream]);
+
   const generateSyntheticScenario = useCallback(
     async (scenario, days = 60) => {
       try {
@@ -295,9 +321,12 @@ export function HelmStoreProvider({ children }) {
         liveMode,
         startMission,
         loadRun,
+        clearActiveRun,
+        switchModel,
         resolveApproval,
         generateSyntheticScenario,
         fetchSyntheticData,
+        fetchHealth,
       }}
     >
       {children}

@@ -332,6 +332,7 @@ def verify_copy_citations(req: VerifyCopyRequest) -> dict[str, Any]:
 from services.api.db.synthetic_sqlite import (
     generate_synthetic_scenario,
     get_synthetic_meta,
+    load_synthetic_daily_trends,
     load_synthetic_snapshot,
 )
 
@@ -383,6 +384,7 @@ def get_current_synthetic_snapshot() -> dict[str, Any]:
     """Fetch current snapshot of synthetic SQLite campaigns and aggregate metrics."""
     try:
         snapshot = load_synthetic_snapshot(lookback_days=30)
+        daily_trends = load_synthetic_daily_trends(lookback_days=30)
         return {
             "source": snapshot.source,
             "campaign_count": len(snapshot.campaigns),
@@ -404,11 +406,13 @@ def get_current_synthetic_snapshot() -> dict[str, Any]:
                 }
                 for c in snapshot.campaigns
             ],
+            "daily_trends": daily_trends,
             "notes": snapshot.notes,
             "meta": get_synthetic_meta(),
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
 
 
 # Mount Web Console frontend (React SPA)

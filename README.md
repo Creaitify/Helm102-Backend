@@ -1,4 +1,4 @@
-# HELM02 — Governed Marketing Orchestration System
+# HELM — Governed Marketing Orchestration System
 
 Governor-led, star-topology marketing orchestration: ingest ad performance
 (Google Ads / Meta via [mureo](https://github.com/logly/mureo), BYOD, or a

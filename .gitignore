@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+env/
+venv/
+ENV/
+
+# Secrets & Environment Variables
+.env
+.env.local
+*.pem
+*.key
+
+# SQLite Databases & Local Runtime Data
+*.sqlite
+*.sqlite3
+*.db
+services/api/data/*.sqlite
+services/api/data/*.json
+
+# Node / Web
+node_modules/
+dist/
+.next/
+
+# Test & scratch artifacts
+.pytest_cache/
+scratch/
+
+# Vendored third-party clones (fetched separately — see README)
+external/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Agent session scaffolding
+.agents/

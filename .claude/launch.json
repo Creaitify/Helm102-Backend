@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "helm02-api",
+      "runtimeExecutable": "C:\\Users\\hp\\HELM02\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["scripts/serve.py"],
+      "port": 8000,
+      "autoPort": true
+    }
+  ]
+}

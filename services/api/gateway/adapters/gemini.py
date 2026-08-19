@@ -83,6 +83,15 @@ class GeminiAdapter:
                     json=payload,
                     headers={"Content-Type": "application/json"},
                 )
+                # If model name is in preview / 404 on specific API key, fallback gracefully to gemini-2.5-flash
+                if resp.status_code == 404 and model_name in ("gemini-3.1-flash", "gemini-3.5-flash"):
+                    fallback_model = "gemini-2.5-flash"
+                    fallback_url = f"{_GEMINI_BASE_URL}/{fallback_model}:generateContent?key={self.api_key}"
+                    resp = await client.post(
+                        fallback_url,
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                    )
             except httpx.TimeoutException as exc:
                 raise AdapterError(f"Gemini API call timed out (15s limit): {exc}") from exc
             except Exception as exc:

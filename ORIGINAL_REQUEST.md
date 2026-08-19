@@ -46,3 +46,47 @@ Integrity mode: development
 ### Synthetic Data & Compliance
 - [x] SQLite synthetic generator creates multi-channel campaigns with coherent decay signals.
 - [x] SEBI compliance verifier detects prohibited claims and provides instant feedback.
+
+## 2026-08-19T04:07:13Z
+
+Universal Messy Marketing Dataset Ingestion & Automated Data Cleaning Pipeline for HELM. Ingest, sanitize, profile, and transform multi-platform marketing datasets (Google Ads, Meta Ads, TikTok Ads, LinkedIn Ads) with missing columns, varied column aliasing (`ad_spend`, `revenue`, `CPC`), decimal/fractional CTR formats, and automatic campaign name synthesis for full Governor and Analyst downstream orchestration.
+
+Working directory: c:/Users/hp/HELM02
+Integrity mode: development
+
+## Requirements
+
+### R1. Universal Column Aliasing & Metric Auto-Derivation
+- Expand canonical column aliasing in `modules/ads/byod_importer.py` to support `ad_spend`, `adspend`, `revenue`, `conv_value`, `sales`, `cpc`, `cost_per_click`, `campaign_type`, `industry`, `country`, `date`, `day`.
+- Auto-derive missing metrics where possible:
+  - If `roas` is missing but `revenue` and `spend` exist: compute `roas = revenue / spend`.
+  - If `spend` is missing but `clicks` and `cpc` exist: compute `spend = clicks * cpc`.
+  - If `cpa` is missing but `spend` and `conversions` exist: compute `cpa = spend / conversions`.
+  - If `ctr` is given as a decimal fraction (`0.0 < ctr <= 1.0`): normalize to percentage format (e.g., `0.0353` → `3.53%`).
+
+### R2. Multi-Platform Support & Intelligent Campaign Synthesis
+- Update `Platform` enum in `modules/ads/contracts.py` and `modules/creative/schema.py` to support `GOOGLE_ADS`, `META_ADS`, `TIKTOK_ADS`, `LINKEDIN_ADS`, `BYOD`.
+- If `campaign_name` is absent in the source dataset, synthesize a descriptive campaign name from available contextual dimensions: `[{platform}] {campaign_type} - {industry} ({country})` with deterministic slug identifiers.
+
+### R3. Automated Data Cleaning, Profiling & Ingestion
+- Clean and sanitize input data: strip whitespace, handle null/missing values, remove unquoted carriage returns, and filter empty rows.
+- Store the user's multi-channel 300+ row dataset in `services/api/data/sample_multichannel_campaigns.csv` and activate it in the BYOD dataset store.
+- Enable full Governor and Analyst workflows to run directly on the cleaned multi-channel dataset.
+
+### R4. Automated Verification & Regression Prevention
+- Add comprehensive pytest unit tests verifying the exact user-supplied dataset (Google Ads, TikTok Ads, Meta Ads with 300+ rows).
+- Ensure all 215+ backend tests and 21+ frontend vitest tests pass with 0 errors.
+
+## Acceptance Criteria
+
+### Data Ingestion & Cleaning
+- [x] User-supplied 300+ row CSV parses with 100% success into `CampaignSnapshot`.
+- [x] Columns `ad_spend`, `revenue`, `CTR` (decimal), `CPC`, `conversions`, `CPA`, `ROAS` are correctly mapped and normalized.
+- [x] Missing campaign names are synthesized as descriptive multi-dimensional strings.
+- [x] Google Ads, Meta Ads, and TikTok Ads are mapped to their respective `Platform` enums.
+- [x] Cleaned dataset is accessible via `/api/byod/upload`, `/api/byod/current`, and used by `/api/runs`.
+
+### Test & Build Health
+- [x] Pytest suite passes all tests including dedicated messy dataset tests.
+- [x] Vitest suite passes all 21 frontend tests.
+- [x] Frontend builds cleanly with Vite (`npm run build`).

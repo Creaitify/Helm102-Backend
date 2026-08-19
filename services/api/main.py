@@ -282,7 +282,21 @@ def get_run_audit_trail(run_id: str) -> list[dict[str, Any]]:
 
 # --- BYOD & Knowledge Verification Endpoints ---
 
-from modules.ads.byod_importer import get_finnovate_sample_data, parse_csv
+# --- BYOD (Bring-Your-Own-Data) Real Data Ingestion & Knowledge Verification ---
+
+import base64
+from modules.ads.byod_importer import (
+    clear_active_byod_snapshot,
+    fetch_and_parse_url,
+    get_active_byod_snapshot,
+    get_finnovate_sample_data,
+    has_active_byod_snapshot,
+    import_byod_file,
+    parse_csv,
+    parse_excel,
+    parse_json,
+    set_active_byod_snapshot,
+)
 from services.api.knowledge.citations import CitationVerifier
 
 citation_verifier = CitationVerifier()
@@ -295,6 +309,18 @@ class VerifyCopyRequest(BaseModel):
 
 class ByodUploadRequest(BaseModel):
     csv_content: str = Field(..., json_schema_extra={"example": "campaign_id,campaign_name,platform,spend_inr,impressions,clicks,conversions,roas,cpa_inr,ctr,status\ncmp_01,Search Intent,google_ads,45000,125000,8400,420,3.4,107.14,6.72,ENABLED"})
+    activate: bool = Field(default=True, description="Whether to set this as the active dataset for Governor runs.")
+
+
+class ByodFileUploadRequest(BaseModel):
+    file_content: str = Field(..., description="Raw text or base64-encoded string of CSV, XLSX, or JSON file.")
+    filename: str = Field(default="uploaded_campaigns.csv", description="Original filename (e.g. data.xlsx, report.csv, metrics.json)")
+    activate: bool = Field(default=True, description="Whether to set this as the active dataset for Governor runs.")
+
+
+class ByodUrlRequest(BaseModel):
+    url: str = Field(..., description="Public or accessible HTTP/HTTPS URL serving CSV, XLSX, or JSON campaign data.")
+    activate: bool = Field(default=True, description="Whether to set this as the active dataset for Governor runs.")
 
 
 @app.get("/api/byod/sample")
@@ -310,10 +336,14 @@ def get_byod_sample() -> dict[str, Any]:
 
 @app.post("/api/byod/parse")
 def parse_byod_csv(req: ByodUploadRequest) -> dict[str, Any]:
-    """Parse custom CSV dataset into CampaignSnapshot."""
+    """Parse custom CSV dataset into CampaignSnapshot and optionally activate it."""
     try:
         snapshot = parse_csv(req.csv_content)
+        if req.activate:
+            set_active_byod_snapshot(snapshot)
         return {
+            "status": "success",
+            "activated": req.activate,
             "platform": snapshot.platform.value,
             "campaign_count": len(snapshot.campaigns),
             "total_spend_inr": snapshot.total_spend_inr,
@@ -324,15 +354,157 @@ def parse_byod_csv(req: ByodUploadRequest) -> dict[str, Any]:
                     "campaign_name": c.campaign_name,
                     "platform": c.platform.value,
                     "spend_inr": c.spend_inr,
+                    "impressions": c.impressions,
+                    "clicks": c.clicks,
+                    "conversions": c.conversions,
                     "roas": c.roas,
                     "cpa_inr": c.cpa_inr,
                     "ctr": c.ctr,
+                    "status": c.status,
                 }
                 for c in snapshot.campaigns
-            ]
+            ],
         }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/byod/upload")
+def upload_byod_file(req: ByodFileUploadRequest) -> dict[str, Any]:
+    """Upload and parse a CSV, Excel (.xlsx, .xls), or JSON dataset."""
+    try:
+        raw_bytes: bytes
+        content_str = req.file_content.strip()
+        if content_str.startswith("data:") and ";base64," in content_str:
+            content_str = content_str.split(";base64,")[1]
+
+        # Try base64 decoding first
+        try:
+            decoded = base64.b64decode(content_str)
+            # If the decoded string starts with JSON / XML / PK or CSV header
+            if req.filename.lower().endswith((".xlsx", ".xls")) or decoded.startswith((b"PK", b"{", b"[")) or b"," in decoded[:200]:
+                raw_bytes = decoded
+            else:
+                raw_bytes = req.file_content.encode("utf-8")
+        except Exception:
+            raw_bytes = req.file_content.encode("utf-8")
+
+        snapshot = import_byod_file(raw_bytes, filename=req.filename)
+        if req.activate:
+            set_active_byod_snapshot(snapshot)
+
+        return {
+            "status": "success",
+            "filename": req.filename,
+            "activated": req.activate,
+            "source": snapshot.source,
+            "campaign_count": len(snapshot.campaigns),
+            "total_spend_inr": snapshot.total_spend_inr,
+            "blended_roas": snapshot.blended_roas,
+            "campaigns": [
+                {
+                    "campaign_id": c.campaign_id,
+                    "campaign_name": c.campaign_name,
+                    "platform": c.platform.value,
+                    "spend_inr": c.spend_inr,
+                    "impressions": c.impressions,
+                    "clicks": c.clicks,
+                    "conversions": c.conversions,
+                    "roas": c.roas,
+                    "cpa_inr": c.cpa_inr,
+                    "ctr": c.ctr,
+                    "status": c.status,
+                }
+                for c in snapshot.campaigns
+            ],
+        }
+    except Exception as exc:
+        logger.error("BYOD file upload failed: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/byod/url")
+async def ingest_byod_url(req: ByodUrlRequest) -> dict[str, Any]:
+    """Fetch campaign data from a remote URL (CSV, Excel, or JSON) and ingest it."""
+    try:
+        snapshot = await fetch_and_parse_url(req.url)
+        if req.activate:
+            set_active_byod_snapshot(snapshot)
+
+        return {
+            "status": "success",
+            "url": req.url,
+            "activated": req.activate,
+            "campaign_count": len(snapshot.campaigns),
+            "total_spend_inr": snapshot.total_spend_inr,
+            "blended_roas": snapshot.blended_roas,
+            "campaigns": [
+                {
+                    "campaign_id": c.campaign_id,
+                    "campaign_name": c.campaign_name,
+                    "platform": c.platform.value,
+                    "spend_inr": c.spend_inr,
+                    "impressions": c.impressions,
+                    "clicks": c.clicks,
+                    "conversions": c.conversions,
+                    "roas": c.roas,
+                    "cpa_inr": c.cpa_inr,
+                    "ctr": c.ctr,
+                    "status": c.status,
+                }
+                for c in snapshot.campaigns
+            ],
+        }
+    except Exception as exc:
+        logger.error("BYOD URL ingestion failed: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/byod/current")
+def get_current_byod_dataset() -> dict[str, Any]:
+    """Retrieve the currently active BYOD real dataset if loaded."""
+    snapshot = get_active_byod_snapshot()
+    if not snapshot:
+        return {
+            "active": False,
+            "message": "No active BYOD dataset loaded. Using SQLite synthetic data.",
+        }
+
+    return {
+        "active": True,
+        "source": snapshot.source,
+        "campaign_count": len(snapshot.campaigns),
+        "total_spend_inr": snapshot.total_spend_inr,
+        "blended_roas": snapshot.blended_roas,
+        "timestamp": snapshot.timestamp,
+        "campaigns": [
+            {
+                "campaign_id": c.campaign_id,
+                "campaign_name": c.campaign_name,
+                "platform": c.platform.value,
+                "spend_inr": c.spend_inr,
+                "impressions": c.impressions,
+                "clicks": c.clicks,
+                "conversions": c.conversions,
+                "roas": c.roas,
+                "cpa_inr": c.cpa_inr,
+                "ctr": c.ctr,
+                "status": c.status,
+            }
+            for c in snapshot.campaigns
+        ],
+    }
+
+
+@app.delete("/api/byod/current")
+def clear_current_byod_dataset() -> dict[str, Any]:
+    """Clear active BYOD dataset, returning the system to SQLite synthetic data mode."""
+    clear_active_byod_snapshot()
+    return {
+        "status": "cleared",
+        "active": False,
+        "data_source": "synthetic",
+    }
 
 
 @app.post("/api/citations/verify")

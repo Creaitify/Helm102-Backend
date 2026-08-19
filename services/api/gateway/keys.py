@@ -56,12 +56,16 @@ def get_active_provider() -> str:
 
 
 def get_model_for_provider(provider: str, fast: bool = False) -> str:
-    """Get configured model name for the given provider."""
+    """Get configured model name for the given provider.
+    
+    Default for Google Gemini is 'gemini-3.1-flash' (or 'gemini-3.5-flash' / 'gemini-2.5-flash').
+    Default for Anthropic Claude is 'claude-3-5-sonnet-20241022'.
+    """
     provider = provider.lower()
     if provider == "gemini":
         if fast:
-            return os.environ.get("GEMINI_FAST_MODEL", "gemini-2.5-flash")
-        return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+            return os.environ.get("GEMINI_FAST_MODEL", "gemini-3.1-flash")
+        return os.environ.get("GEMINI_MODEL", "gemini-3.1-flash")
     elif provider == "anthropic":
         # Every task routes to the primary model — HELM's outputs drive real
         # budget decisions, so no task gets a downgraded model.

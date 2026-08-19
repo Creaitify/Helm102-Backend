@@ -10,6 +10,8 @@ from typing import Any
 class Platform(StrEnum):
     GOOGLE_ADS = "google_ads"
     META_ADS = "meta_ads"
+    TIKTOK_ADS = "tiktok_ads"
+    LINKEDIN_ADS = "linkedin_ads"
     BYOD = "byod"
 
 

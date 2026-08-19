@@ -879,7 +879,13 @@ def _hop_label(hop: dict[str, Any]) -> str:
 
 def _platform_label(platform: Any) -> str:
     value = getattr(platform, "value", platform)
-    return {"google_ads": "Google Ads", "meta_ads": "Meta", "byod": "Imported"}.get(str(value), str(value))
+    return {
+        "google_ads": "Google Ads",
+        "meta_ads": "Meta",
+        "tiktok_ads": "TikTok Ads",
+        "linkedin_ads": "LinkedIn Ads",
+        "byod": "Imported",
+    }.get(str(value), str(value))
 
 
 def _inr(amount: Any) -> str:

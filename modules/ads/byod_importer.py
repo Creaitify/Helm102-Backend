@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
+import httpx
 import openpyxl
 
 from modules.ads.contracts import CampaignSnapshot, MetricRow, Platform
@@ -38,6 +40,15 @@ class InvalidDataFormatError(BYODImportError):
 # Canonical column keys required for basic metric calculation
 REQUIRED_METRIC_FIELDS: tuple[str, ...] = ("spend_inr", "roas", "clicks", "conversions")
 
+# Platform label mappings for human-readable display and synthesized campaign naming
+PLATFORM_LABELS: dict[Platform, str] = {
+    Platform.GOOGLE_ADS: "Google Ads",
+    Platform.META_ADS: "Meta Ads",
+    Platform.TIKTOK_ADS: "TikTok Ads",
+    Platform.LINKEDIN_ADS: "LinkedIn Ads",
+    Platform.BYOD: "BYOD",
+}
+
 # Human-friendly field display names for error messages
 FIELD_DISPLAY_NAMES: dict[str, str] = {
     "spend_inr": "spend",
@@ -46,10 +57,15 @@ FIELD_DISPLAY_NAMES: dict[str, str] = {
     "conversions": "conversions",
     "campaign_id": "campaign_id",
     "campaign_name": "campaign_name",
+    "campaign_type": "campaign_type",
+    "industry": "industry",
+    "country": "country",
     "platform": "platform",
     "impressions": "impressions",
     "cpa_inr": "cpa",
     "ctr": "ctr",
+    "cpc": "cpc",
+    "revenue": "revenue",
     "status": "status",
     "account_id": "account_id",
 }
@@ -67,6 +83,7 @@ COLUMN_ALIASES: dict[str, set[str]] = {
         "adgroup_id",
         "ad_group_id",
         "campaign_code",
+        "campaign_key",
     },
     "campaign_name": {
         "campaign_name",
@@ -79,6 +96,41 @@ COLUMN_ALIASES: dict[str, set[str]] = {
         "campaign_title",
         "adgroup_name",
         "ad_group_name",
+        "title",
+    },
+    "campaign_type": {
+        "campaign_type",
+        "type",
+        "campaign_category",
+        "ad_type",
+        "channel_type",
+        "objective",
+        "goal",
+    },
+    "industry": {
+        "industry",
+        "vertical",
+        "sector",
+        "business_type",
+        "category",
+        "niche",
+    },
+    "country": {
+        "country",
+        "geo",
+        "region",
+        "location",
+        "territory",
+        "market",
+        "country_code",
+    },
+    "date": {
+        "date",
+        "day",
+        "timestamp",
+        "period",
+        "event_date",
+        "report_date",
     },
     "platform": {
         "platform",
@@ -88,6 +140,7 @@ COLUMN_ALIASES: dict[str, set[str]] = {
         "source",
         "publisher",
         "ad_network",
+        "channel_name",
     },
     "spend_inr": {
         "spend_inr",
@@ -97,10 +150,38 @@ COLUMN_ALIASES: dict[str, set[str]] = {
         "spend_in_inr",
         "amount_spent",
         "amount_spent_inr",
+        "amount_spent_usd",
         "total_spend",
         "cost_inr",
+        "cost_usd",
         "spend_amount",
         "daily_spend",
+        "spend_usd",
+        "ad_spend",
+        "adspend",
+        "ad_cost",
+        "adcost",
+        "total_cost",
+        "budget_spent",
+        "spent",
+        "cost_micros",
+        "media_spend",
+    },
+    "revenue": {
+        "revenue",
+        "conv_value",
+        "conversion_value",
+        "total_revenue",
+        "sales",
+        "purchase_value",
+        "total_conv_value",
+        "sales_amount",
+        "revenue_usd",
+        "revenue_inr",
+        "value",
+        "total_sales",
+        "gross_revenue",
+        "all_conv_value",
     },
     "impressions": {
         "impressions",
@@ -109,6 +190,7 @@ COLUMN_ALIASES: dict[str, set[str]] = {
         "impressions_count",
         "impr_count",
         "total_impressions",
+        "reach",
     },
     "clicks": {
         "clicks",
@@ -116,6 +198,19 @@ COLUMN_ALIASES: dict[str, set[str]] = {
         "ad_clicks",
         "clicks_count",
         "total_clicks",
+        "outbound_clicks",
+    },
+    "cpc": {
+        "cpc",
+        "cost_per_click",
+        "cpc_inr",
+        "cpc_usd",
+        "avg_cpc",
+        "average_cpc",
+        "cost_click",
+        "avg_cost_click",
+        "cost_per_link_click",
+        "cpc_amount",
     },
     "conversions": {
         "conversions",
@@ -126,6 +221,9 @@ COLUMN_ALIASES: dict[str, set[str]] = {
         "purchases",
         "conversions_count",
         "total_conversions",
+        "purchases_count",
+        "signups",
+        "orders",
     },
     "roas": {
         "roas",
@@ -135,6 +233,7 @@ COLUMN_ALIASES: dict[str, set[str]] = {
         "return_on_spend",
         "value_per_cost",
         "conv_value_cost",
+        "website_purchase_roas",
     },
     "cpa_inr": {
         "cpa_inr",
@@ -146,6 +245,8 @@ COLUMN_ALIASES: dict[str, set[str]] = {
         "cost_per_conv",
         "cost_conv",
         "cpa_rs",
+        "cpa_usd",
+        "cost_per_purchase",
     },
     "ctr": {
         "ctr",
@@ -154,6 +255,7 @@ COLUMN_ALIASES: dict[str, set[str]] = {
         "ctr_percent",
         "click_thru_rate",
         "clickthrough_rate",
+        "inline_link_click_ctr",
     },
     "status": {
         "status",
@@ -161,6 +263,7 @@ COLUMN_ALIASES: dict[str, set[str]] = {
         "state",
         "status_name",
         "ad_status",
+        "delivery_status",
     },
     "account_id": {
         "account_id",
@@ -177,12 +280,9 @@ def normalize_column_name(col: str) -> str:
     """Normalize a header string for case/format-insensitive matching."""
     if not isinstance(col, str):
         col = str(col) if col is not None else ""
-    # Strip whitespace, lower-case
-    norm = col.strip().lower()
-    # Remove common punctuation / currency / unit annotations like (inr), (%), [inr], ₹, $
+    norm = col.strip("\ufeff\u200b\u200c\u200d\r\n\t ").lower()
     norm = re.sub(r"[\(（\[].*?[\)）\]]", "", norm)
     norm = re.sub(r"[₹\$,%#@!]", "", norm)
-    # Replace whitespace and punctuation with underscores
     norm = re.sub(r"[\s\-\./\\]+", "_", norm)
     norm = re.sub(r"_+", "_", norm).strip("_")
     return norm
@@ -217,6 +317,13 @@ def validate_headers(header_map: dict[str, int], raw_headers: Sequence[Any]) -> 
         for field in REQUIRED_METRIC_FIELDS
         if field not in header_map
     ]
+    # Allow revenue to satisfy roas if roas is not explicitly provided
+    if "roas" in missing and "revenue" in header_map:
+        missing.remove("roas")
+    # Allow clicks and cpc to satisfy spend if spend is not explicitly provided
+    if "spend" in missing and "clicks" in header_map and "cpc" in header_map:
+        missing.remove("spend")
+
     if missing:
         raw_names = [str(h) for h in raw_headers if h is not None and str(h).strip()]
         raise MissingRequiredColumnsError(
@@ -253,13 +360,18 @@ def _parse_int(val: Any, default: int = 0) -> int:
 
 
 def _parse_platform(val: Any, context_hint: str = "", default: Platform = Platform.BYOD) -> Platform:
-    """Resolve Platform enum from string value or context hint (e.g. sheet name)."""
+    """Resolve Platform enum from string value or context hint."""
     text = f"{val or ''} {context_hint}".strip().lower()
-    if "google" in text or "gads" in text or "adwords" in text:
+    tokens = set(re.findall(r"\b\w+\b", text)) | set(re.findall(r"[a-z0-9]+", text))
+    if any(k in tokens for k in ("google", "gads", "adwords", "youtube", "google_ads", "g_ads")):
         return Platform.GOOGLE_ADS
-    if "meta" in text or "facebook" in text or "fb" in text or "instagram" in text:
+    if any(k in tokens for k in ("tiktok", "tik_tok", "douyin", "bytedance", "tiktok_ads", "tt_ads")):
+        return Platform.TIKTOK_ADS
+    if any(k in tokens for k in ("linkedin", "li_ads", "linkedin_ads", "li")):
+        return Platform.LINKEDIN_ADS
+    if any(k in tokens for k in ("meta", "facebook", "fb", "instagram", "ig", "meta_ads", "fb_ads", "ig_ads")):
         return Platform.META_ADS
-    if "byod" in text or "manual" in text or "sheet" in text:
+    if any(k in tokens for k in ("byod", "manual", "sheet", "csv", "excel")):
         return Platform.BYOD
     return default
 
@@ -277,7 +389,7 @@ def parse_row(
     default_platform: Platform = Platform.BYOD,
     context_hint: str = "",
 ) -> MetricRow | None:
-    """Parse a single data row into a MetricRow instance."""
+    """Parse a single data row into a MetricRow instance with intelligent autocleaning."""
     # Check if row is completely empty
     if not any(v is not None and str(v).strip() != "" for v in row_values):
         return None
@@ -288,44 +400,84 @@ def parse_row(
             return row_values[idx]
         return None
 
-    campaign_name_val = get_val("campaign_name")
-    campaign_name = str(campaign_name_val).strip() if campaign_name_val is not None else f"Campaign_{row_index}"
-    if not campaign_name:
-        campaign_name = f"Campaign_{row_index}"
-
-    campaign_id_val = get_val("campaign_id")
-    if campaign_id_val is not None and str(campaign_id_val).strip():
-        campaign_id = str(campaign_id_val).strip()
-    else:
-        # Create deterministic slug ID
-        slug = re.sub(r"[^\w]+", "_", campaign_name.lower()).strip("_")
-        campaign_id = f"cmp_{slug or 'row'}_{row_index}"
-
     platform_val = get_val("platform")
     if platform_val is not None and str(platform_val).strip():
         platform = _parse_platform(platform_val, context_hint=context_hint, default=default_platform)
     else:
         platform = _parse_platform("", context_hint=context_hint, default=default_platform)
 
+    # Intelligent Campaign Name & ID Synthesis
+    campaign_name_val = get_val("campaign_name")
+    campaign_type_val = get_val("campaign_type")
+    industry_val = get_val("industry")
+    country_val = get_val("country")
+
+    if campaign_name_val is not None and str(campaign_name_val).strip():
+        campaign_name = str(campaign_name_val).strip()
+    else:
+        # Build multi-dimensional descriptive name from available context
+        parts = []
+        plat_label = PLATFORM_LABELS.get(platform, str(platform.value).replace("_", " ").title())
+        if campaign_type_val and str(campaign_type_val).strip():
+            parts.append(str(campaign_type_val).strip())
+        if industry_val and str(industry_val).strip():
+            parts.append(str(industry_val).strip())
+
+        main_desc = " - ".join(parts) if parts else f"Campaign {row_index}"
+        geo_tag = f" ({str(country_val).strip()})" if country_val and str(country_val).strip() else ""
+        campaign_name = f"[{plat_label}] {main_desc}{geo_tag}"
+
+    campaign_id_val = get_val("campaign_id")
+    if campaign_id_val is not None and str(campaign_id_val).strip():
+        campaign_id = str(campaign_id_val).strip()
+    else:
+        # Deterministic slug ID
+        slug = re.sub(r"[^\w]+", "_", campaign_name.lower()).strip("_")
+        campaign_id = f"cmp_{slug or 'row'}_{row_index}"
+
     spend_inr = _parse_float(get_val("spend_inr"), 0.0)
     impressions = _parse_int(get_val("impressions"), 0)
     clicks = _parse_int(get_val("clicks"), 0)
     conversions = _parse_int(get_val("conversions"), 0)
-    roas = _parse_float(get_val("roas"), 0.0)
+    cpc_val = _parse_float(get_val("cpc"), 0.0)
+    revenue_val = _parse_float(get_val("revenue"), 0.0)
 
-    # Derived or explicit CPA
+    # 1) Derive spend if missing but clicks and cpc exist
+    if spend_inr == 0.0 and clicks > 0 and cpc_val > 0.0:
+        spend_inr = round(clicks * cpc_val, 2)
+
+    # 2) ROAS Handling & Derivation
+    roas_raw = get_val("roas")
+    if roas_raw is not None and str(roas_raw).strip() and str(roas_raw).strip() != "-":
+        roas = round(_parse_float(roas_raw, 0.0), 2)
+    elif revenue_val > 0.0 and spend_inr > 0.0:
+        roas = round(revenue_val / spend_inr, 2)
+    else:
+        roas = 0.0
+
+    # 3) Derived or explicit CPA
     cpa_raw = get_val("cpa_inr")
     if cpa_raw is not None and str(cpa_raw).strip() and str(cpa_raw).strip() != "-":
         cpa_inr = round(_parse_float(cpa_raw, 0.0), 2)
+    elif conversions > 0:
+        cpa_inr = round(spend_inr / conversions, 2)
     else:
-        cpa_inr = round(spend_inr / conversions, 2) if conversions > 0 else 0.0
+        cpa_inr = 0.0
 
-    # Derived or explicit CTR
+    # 4) Derived or explicit CTR (auto-normalize decimal fractions like 0.0353 -> 3.53%)
     ctr_raw = get_val("ctr")
+    ctr = 0.0
     if ctr_raw is not None and str(ctr_raw).strip() and str(ctr_raw).strip() != "-":
-        ctr = round(_parse_float(ctr_raw, 0.0), 2)
-    else:
-        ctr = round((clicks / impressions) * 100.0, 2) if impressions > 0 else 0.0
+        raw_str = str(ctr_raw).strip()
+        has_percent = "%" in raw_str
+        parsed_ctr = _parse_float(ctr_raw, 0.0)
+        if 0.0 < parsed_ctr <= 1.0 and not has_percent:
+            ctr = round(parsed_ctr * 100.0, 2)
+        else:
+            ctr = round(parsed_ctr, 2)
+
+    if ctr == 0.0 and impressions > 0:
+        ctr = round((clicks / impressions) * 100.0, 2)
 
     status_val = get_val("status")
     status = str(status_val).strip().upper() if status_val is not None and str(status_val).strip() else "ENABLED"
@@ -427,16 +579,33 @@ def parse_csv(
     if not text:
         text = raw_bytes.decode("utf-8", errors="replace")
 
-    string_io = io.StringIO(text.strip())
+    # Normalize universal line endings (CRLF \r\n and CR \r -> LF \n)
+    normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Initialize StringIO with universal newline="" as recommended by Python's csv module
+    string_io = io.StringIO(normalized_text.strip(), newline="")
+
     # Sniff dialect for delimiter
     try:
-        sample = text[:2048]
+        sample = normalized_text[:2048]
         dialect = csv.Sniffer().sniff(sample, delimiters=",\t;|")
     except Exception:
         dialect = csv.excel
 
-    reader = csv.reader(string_io, dialect=dialect)
-    rows = [r for r in reader if any(cell.strip() for cell in r)]
+    try:
+        reader = csv.reader(string_io, dialect=dialect)
+        rows = [r for r in reader if any(cell.strip() for cell in r)]
+    except csv.Error:
+        # Resilient fallback: parse line-by-line using universal splitlines()
+        rows = []
+        for line in normalized_text.splitlines():
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+            line_reader = csv.reader([line_clean], dialect=dialect)
+            for r in line_reader:
+                if any(cell.strip() for cell in r):
+                    rows.append(r)
 
     if not rows:
         raise InvalidDataFormatError("CSV dataset is empty.")
@@ -642,12 +811,208 @@ def parse_excel_sheets(
     return result
 
 
+def parse_json(
+    source: str | bytes | Path | io.IOBase | dict[str, Any] | list[Any],
+    platform: Platform | str | None = None,
+    account_id: str = "byod_account",
+    source_tag: str = "byod",
+) -> CampaignSnapshot:
+    """Parse JSON dataset (array of records or dict containing 'campaigns' / 'data') into CampaignSnapshot."""
+    data: Any = None
+    if isinstance(source, (dict, list)):
+        data = source
+    elif isinstance(source, (str, Path)) and (isinstance(source, Path) or (len(str(source)) < 500 and "\n" not in str(source) and Path(source).is_file())):
+        content = Path(source).read_text(encoding="utf-8")
+        data = json.loads(content)
+    elif isinstance(source, bytes):
+        data = json.loads(source.decode("utf-8"))
+    elif isinstance(source, str):
+        data = json.loads(source)
+    elif hasattr(source, "read"):
+        content = source.read()
+        text = content.decode("utf-8") if isinstance(content, bytes) else content
+        data = json.loads(text)
+    else:
+        raise InvalidDataFormatError(f"Unsupported JSON source type: {type(source)}")
+
+    rows: list[dict[str, Any]] = []
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        if "campaigns" in data and isinstance(data["campaigns"], list):
+            rows = data["campaigns"]
+        elif "data" in data and isinstance(data["data"], list):
+            rows = data["data"]
+        elif "rows" in data and isinstance(data["rows"], list):
+            rows = data["rows"]
+        else:
+            # Single object or dict of sheets
+            for k, v in data.items():
+                if isinstance(v, list):
+                    rows.extend(v)
+            if not rows:
+                rows = [data]
+    else:
+        raise InvalidDataFormatError("JSON payload must be a list of campaign objects or a dictionary containing 'campaigns'.")
+
+    if not rows:
+        raise InvalidDataFormatError("JSON dataset contains no campaign records.")
+
+    # Convert list of dicts to MetricRows
+    campaigns: list[MetricRow] = []
+    default_plat = (
+        Platform(platform) if isinstance(platform, str)
+        else platform if platform is not None
+        else Platform.BYOD
+    )
+
+    for idx, r in enumerate(rows, start=1):
+        if not isinstance(r, dict):
+            continue
+        # Map dict keys using normalize_column_name
+        norm_dict: dict[str, Any] = {}
+        for k, v in r.items():
+            norm_k = normalize_column_name(str(k))
+            for canonical, aliases in COLUMN_ALIASES.items():
+                if norm_k in aliases or norm_k == canonical:
+                    norm_dict[canonical] = v
+                    break
+
+        plat_raw = norm_dict.get("platform") or r.get("platform")
+        c_plat = _parse_platform(plat_raw, default=default_plat)
+
+        # Intelligent Campaign Name & ID Synthesis
+        campaign_name_val = norm_dict.get("campaign_name", r.get("campaign_name", r.get("name", r.get("campaign"))))
+        campaign_type_val = norm_dict.get("campaign_type", r.get("campaign_type", r.get("type")))
+        industry_val = norm_dict.get("industry", r.get("industry"))
+        country_val = norm_dict.get("country", r.get("country"))
+
+        if campaign_name_val is not None and str(campaign_name_val).strip():
+            c_name = str(campaign_name_val).strip()
+        else:
+            parts = []
+            plat_label = PLATFORM_LABELS.get(c_plat, str(c_plat.value).replace("_", " ").title())
+            if campaign_type_val and str(campaign_type_val).strip():
+                parts.append(str(campaign_type_val).strip())
+            if industry_val and str(industry_val).strip():
+                parts.append(str(industry_val).strip())
+
+            main_desc = " - ".join(parts) if parts else f"Campaign {idx}"
+            geo_tag = f" ({str(country_val).strip()})" if country_val and str(country_val).strip() else ""
+            c_name = f"[{plat_label}] {main_desc}{geo_tag}"
+
+        campaign_id_val = norm_dict.get("campaign_id", r.get("campaign_id", r.get("id")))
+        if campaign_id_val is not None and str(campaign_id_val).strip():
+            c_id = str(campaign_id_val).strip()
+        else:
+            slug = re.sub(r"[^\w]+", "_", c_name.lower()).strip("_")
+            c_id = f"cmp_{slug or 'row'}_{idx}"
+
+        spend_inr = _parse_float(norm_dict.get("spend_inr", r.get("spend", r.get("ad_spend", 0.0))))
+        impressions = _parse_int(norm_dict.get("impressions", r.get("impressions", 0)))
+        clicks = _parse_int(norm_dict.get("clicks", r.get("clicks", 0)))
+        conversions = _parse_int(norm_dict.get("conversions", r.get("conversions", 0)))
+        cpc_val = _parse_float(norm_dict.get("cpc", r.get("cpc", r.get("cost_per_click", 0.0))))
+        revenue_val = _parse_float(norm_dict.get("revenue", r.get("revenue", r.get("conv_value", 0.0))))
+
+        # 1) Derive spend if missing but clicks and cpc exist
+        if spend_inr == 0.0 and clicks > 0 and cpc_val > 0.0:
+            spend_inr = round(clicks * cpc_val, 2)
+
+        # 2) ROAS Handling & Derivation
+        roas_raw = norm_dict.get("roas", r.get("roas"))
+        if roas_raw is not None and str(roas_raw).strip() and str(roas_raw).strip() != "-":
+            roas = round(_parse_float(roas_raw, 0.0), 2)
+        elif revenue_val > 0.0 and spend_inr > 0.0:
+            roas = round(revenue_val / spend_inr, 2)
+        else:
+            roas = 0.0
+
+        # 3) Derived or explicit CPA
+        cpa_raw = norm_dict.get("cpa_inr", r.get("cpa", r.get("cpa_inr")))
+        if cpa_raw is not None and str(cpa_raw).strip() and str(cpa_raw).strip() != "-":
+            cpa_inr = round(_parse_float(cpa_raw, 0.0), 2)
+        elif conversions > 0:
+            cpa_inr = round(spend_inr / conversions, 2)
+        else:
+            cpa_inr = 0.0
+
+        # 4) Derived or explicit CTR (auto-normalize decimal fractions like 0.0353 -> 3.53%)
+        ctr_raw = norm_dict.get("ctr", r.get("ctr"))
+        ctr = 0.0
+        if ctr_raw is not None and str(ctr_raw).strip() and str(ctr_raw).strip() != "-":
+            raw_str = str(ctr_raw).strip()
+            has_percent = "%" in raw_str
+            parsed_ctr = _parse_float(ctr_raw, 0.0)
+            if 0.0 < parsed_ctr <= 1.0 and not has_percent:
+                ctr = round(parsed_ctr * 100.0, 2)
+            else:
+                ctr = round(parsed_ctr, 2)
+
+        if ctr == 0.0 and impressions > 0:
+            ctr = round((clicks / impressions) * 100.0, 2)
+
+        status_val = norm_dict.get("status", r.get("status", "ENABLED"))
+        status = str(status_val).strip().upper() if status_val is not None and str(status_val).strip() else "ENABLED"
+
+        campaigns.append(
+            MetricRow(
+                campaign_id=c_id,
+                campaign_name=c_name,
+                platform=c_plat,
+                spend_inr=spend_inr,
+                impressions=impressions,
+                clicks=clicks,
+                conversions=conversions,
+                roas=roas,
+                cpa_inr=cpa_inr,
+                ctr=ctr,
+                status=status,
+            )
+        )
+
+    if not campaigns:
+        raise InvalidDataFormatError("No valid campaign records could be parsed from JSON.")
+
+    return _build_snapshot(
+        campaigns=campaigns,
+        account_ids=[account_id],
+        platform=default_plat if platform is not None else None,
+        source=source_tag,
+    )
+
+
+async def fetch_and_parse_url(
+    url: str,
+    platform: Platform | str | None = None,
+    account_id: str = "url_resource_account",
+) -> CampaignSnapshot:
+    """Fetch campaign data from a remote URL endpoint (CSV or JSON) and parse into CampaignSnapshot."""
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        try:
+            resp = await client.get(url)
+            resp.raise_for_status()
+        except Exception as exc:
+            raise InvalidDataFormatError(f"Failed to fetch data from URL '{url}': {exc}") from exc
+
+    content_type = resp.headers.get("content-type", "").lower()
+    raw_content = resp.content
+
+    # Detect format from content-type or body
+    if "json" in content_type or raw_content.strip().startswith((b"{", b"[")):
+        return parse_json(raw_content, platform=platform, account_id=account_id, source_tag=f"url:{url}")
+    elif "spreadsheet" in content_type or raw_content.startswith(b"PK\x03\x04"):
+        return parse_excel(raw_content, default_platform=platform, account_ids=[account_id], source_tag=f"url:{url}")
+    else:
+        return parse_csv(raw_content, platform=platform, account_id=account_id, source_tag=f"url:{url}")
+
+
 def import_byod_file(
     source: str | bytes | Path | io.IOBase,
     filename: str | None = None,
     default_platform: Platform | str | None = None,
 ) -> CampaignSnapshot:
-    """Unified importer that auto-detects CSV or Excel formats."""
+    """Unified importer that auto-detects CSV, Excel, or JSON formats."""
     # Determine filename/format
     name = ""
     if filename:
@@ -655,25 +1020,69 @@ def import_byod_file(
     elif isinstance(source, (str, Path)):
         name = str(source)
 
-    if name.lower().endswith(".xlsx") or name.lower().endswith(".xlsm") or name.lower().endswith(".xltx"):
+    name_lower = name.lower()
+    if name_lower.endswith((".xlsx", ".xlsm", ".xltx")):
         return parse_excel(source, default_platform=default_platform)
-    elif name.lower().endswith(".csv") or name.lower().endswith(".tsv") or name.lower().endswith(".txt"):
+    elif name_lower.endswith((".json", ".js")):
+        return parse_json(source, platform=default_platform)
+    elif name_lower.endswith((".csv", ".tsv", ".txt")):
         return parse_csv(source, platform=default_platform)
 
     # Check magic bytes for ZIP (XLSX)
     if isinstance(source, bytes) and source.startswith(b"PK\x03\x04"):
         return parse_excel(source, default_platform=default_platform)
 
-    # Fallback to CSV
+    # Check for JSON format
+    if isinstance(source, (str, bytes)):
+        raw_str = source.decode("utf-8", errors="ignore") if isinstance(source, bytes) else source
+        trimmed = raw_str.strip()
+        if trimmed.startswith(("{", "[")):
+            try:
+                return parse_json(source, platform=default_platform)
+            except Exception:
+                pass
+
+    # Fallback to CSV, then Excel
     try:
         return parse_csv(source, platform=default_platform)
     except Exception:
         return parse_excel(source, default_platform=default_platform)
 
 
+# ---------------------------------------------------------------------------
+# Active In-Memory BYOD Dataset Store
+# ---------------------------------------------------------------------------
+_ACTIVE_BYOD_SNAPSHOT: CampaignSnapshot | None = None
+
+
+def set_active_byod_snapshot(snapshot: CampaignSnapshot) -> None:
+    """Set the active BYOD campaign snapshot for Governor and analyst runs."""
+    global _ACTIVE_BYOD_SNAPSHOT
+    _ACTIVE_BYOD_SNAPSHOT = snapshot
+
+
+def get_active_byod_snapshot() -> CampaignSnapshot | None:
+    """Retrieve the currently active BYOD campaign snapshot."""
+    global _ACTIVE_BYOD_SNAPSHOT
+    return _ACTIVE_BYOD_SNAPSHOT
+
+
+def clear_active_byod_snapshot() -> None:
+    """Clear active BYOD dataset, reverting back to synthetic/live modes."""
+    global _ACTIVE_BYOD_SNAPSHOT
+    _ACTIVE_BYOD_SNAPSHOT = None
+
+
+def has_active_byod_snapshot() -> bool:
+    """Check if an active BYOD dataset is currently loaded."""
+    global _ACTIVE_BYOD_SNAPSHOT
+    return _ACTIVE_BYOD_SNAPSHOT is not None
+
+
 # Aliases for convenience
 import_csv = parse_csv
 import_excel = parse_excel
+import_json = parse_json
 
 
 # ---------------------------------------------------------------------------

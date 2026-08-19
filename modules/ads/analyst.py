@@ -268,31 +268,28 @@ class AdOpsAnalyst:
         return findings
 
     def _compute_channel_breakdown(self, campaigns: list[MetricRow]) -> dict[str, Any]:
-        """Compute Google vs Meta aggregated metrics."""
-        google_c = [c for c in campaigns if c.platform == Platform.GOOGLE_ADS]
-        meta_c = [c for c in campaigns if c.platform == Platform.META_ADS]
+        """Compute aggregated metrics dynamically across all active platforms."""
+        breakdown: dict[str, Any] = {}
+        platforms_present = {c.platform for c in campaigns}
+        target_platforms = list(platforms_present) if campaigns else [Platform.GOOGLE_ADS, Platform.META_ADS]
+        if Platform.GOOGLE_ADS not in target_platforms:
+            target_platforms.append(Platform.GOOGLE_ADS)
+        if Platform.META_ADS not in target_platforms:
+            target_platforms.append(Platform.META_ADS)
 
-        g_spend = sum(c.spend_inr for c in google_c)
-        m_spend = sum(c.spend_inr for c in meta_c)
-        g_convs = sum(c.conversions for c in google_c)
-        m_convs = sum(c.conversions for c in meta_c)
+        for plat in target_platforms:
+            plat_c = [c for c in campaigns if c.platform == plat]
+            p_spend = sum(c.spend_inr for c in plat_c)
+            p_convs = sum(c.conversions for c in plat_c)
+            breakdown[plat.value] = {
+                "campaign_count": len(plat_c),
+                "spend_inr": round(p_spend, 2),
+                "conversions": p_convs,
+                "blended_roas": round(sum(c.roas * c.spend_inr for c in plat_c) / p_spend, 2) if p_spend > 0 else 0.0,
+                "blended_cpa_inr": round(p_spend / p_convs, 2) if p_convs > 0 else 0.0,
+            }
 
-        return {
-            "google_ads": {
-                "campaign_count": len(google_c),
-                "spend_inr": g_spend,
-                "conversions": g_convs,
-                "blended_roas": round(sum(c.roas * c.spend_inr for c in google_c) / g_spend, 2) if g_spend > 0 else 0.0,
-                "blended_cpa_inr": round(g_spend / g_convs, 2) if g_convs > 0 else 0.0,
-            },
-            "meta_ads": {
-                "campaign_count": len(meta_c),
-                "spend_inr": m_spend,
-                "conversions": m_convs,
-                "blended_roas": round(sum(c.roas * c.spend_inr for c in meta_c) / m_spend, 2) if m_spend > 0 else 0.0,
-                "blended_cpa_inr": round(m_spend / m_convs, 2) if m_convs > 0 else 0.0,
-            },
-        }
+        return breakdown
 
     def propose_campaign_drafts(
         self, snapshot: CampaignSnapshot, findings: dict[str, Any]

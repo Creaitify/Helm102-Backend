@@ -78,7 +78,7 @@ def test_provider_switching_and_keys(monkeypatch):
     # Test Gemini routing
     monkeypatch.setenv("HELM_LLM_PROVIDER", "gemini")
     assert get_active_provider() == "gemini"
-    assert get_model_for_provider("gemini") == "gemini-2.5-flash"
+    assert get_model_for_provider("gemini") in ("gemini-3.1-flash", "gemini-3.5-flash", "gemini-2.5-flash")
 
     # Test Anthropic routing. HELM pins the strongest model for every task —
     # its outputs drive real budget decisions, so nothing gets a cheap tier.

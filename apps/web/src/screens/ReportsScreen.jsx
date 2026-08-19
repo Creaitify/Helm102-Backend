@@ -367,5 +367,13 @@ function ErrorNote({ message }) {
 }
 
 function platformLabel(platform) {
-  return { google_ads: 'Google Ads', meta_ads: 'Meta', byod: 'Imported' }[platform] || platform;
+  return (
+    {
+      google_ads: 'Google Ads',
+      meta_ads: 'Meta Ads',
+      tiktok_ads: 'TikTok Ads',
+      linkedin_ads: 'LinkedIn Ads',
+      byod: 'Imported',
+    }[platform] || platform
+  );
 }

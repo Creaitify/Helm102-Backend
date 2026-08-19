@@ -16,3 +16,15 @@ os.environ["HELM_ADS_DRY_RUN"] = "true"
 os.environ["GEMINI_API_KEY"] = ""
 os.environ["GOOGLE_API_KEY"] = ""
 os.environ["ANTHROPIC_API_KEY"] = ""
+
+import pytest
+from modules.ads.byod_importer import clear_active_byod_snapshot
+
+
+@pytest.fixture(autouse=True)
+def reset_test_state():
+    """Ensure clean isolated state for each test run."""
+    clear_active_byod_snapshot()
+    yield
+    clear_active_byod_snapshot()
+

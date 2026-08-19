@@ -1,16 +1,109 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HELM — Autonomous Marketing Operations Control Plane</title>
-  <meta name="description" content="Governed marketing operations control plane: ad-ops analysis, compliant creative generation, policy-bounded budget optimization, and human-in-the-loop approval with a full audit trail.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet">
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>HELM - AI Marketing Control Plane</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist:wght@600;800;900&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+
+    <script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "on-primary-container": "#fefcff",
+                        "inverse-surface": "#2e3132",
+                        "on-error-container": "#93000a",
+                        "surface-container-high": "#e7e8e9",
+                        "background": "#f8f9fa",
+                        "on-secondary-container": "#5c6477",
+                        "secondary-container": "#dbe2f9",
+                        "inverse-on-surface": "#f0f1f2",
+                        "on-tertiary-fixed-variant": "#723600",
+                        "primary-fixed-dim": "#adc6ff",
+                        "tertiary-fixed-dim": "#ffb786",
+                        "surface-tint": "#005ac2",
+                        "on-secondary-fixed-variant": "#3f4759",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-fixed": "#001a42",
+                        "on-primary-fixed-variant": "#004395",
+                        "on-surface": "#191c1d",
+                        "on-secondary": "#ffffff",
+                        "on-error": "#ffffff",
+                        "inverse-primary": "#adc6ff",
+                        "surface-container-highest": "#e1e3e4",
+                        "tertiary-container": "#b75b00",
+                        "tertiary-fixed": "#ffdcc6",
+                        "on-background": "#191c1d",
+                        "primary-fixed": "#d8e2ff",
+                        "on-tertiary-container": "#fffbff",
+                        "secondary-fixed-dim": "#bfc6dc",
+                        "surface": "#f8f9fa",
+                        "surface-container-low": "#f3f4f5",
+                        "tertiary": "#924700",
+                        "surface-bright": "#f8f9fa",
+                        "outline-variant": "#c2c6d6",
+                        "outline": "#727785",
+                        "secondary-fixed": "#dbe2f9",
+                        "on-tertiary": "#ffffff",
+                        "secondary": "#565e71",
+                        "surface-container": "#edeeef",
+                        "error-container": "#ffdad6",
+                        "primary-container": "#2170e4",
+                        "on-surface-variant": "#424754",
+                        "on-tertiary-fixed": "#311400",
+                        "surface-dim": "#d9dadb",
+                        "on-secondary-fixed": "#141b2c",
+                        "primary": "#0058be",
+                        "surface-variant": "#e1e3e4",
+                        "on-primary": "#ffffff",
+                        "error": "#ba1a1a",
+                        "agent-blue": "#3b82f6",
+                        "agent-purple": "#8b5cf6",
+                        "agent-orange": "#f97316",
+                        "agent-green": "#10b981",
+                        "success": "#166534",
+                        "success-container": "#dcfce7",
+                        "on-success-container": "#14532d"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.25rem",
+                        "md": "0.375rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    spacing: {
+                        "gutter": "16px",
+                        "sidebar-width": "280px",
+                        "widget-gap": "12px",
+                        "container-padding": "24px"
+                    },
+                    fontFamily: {
+                        "body-md": ["Inter", "sans-serif"],
+                        "headline-lg": ["Geist", "sans-serif"],
+                        "headline-md": ["Geist", "sans-serif"],
+                        "headline-xl": ["Geist", "sans-serif"],
+                        "label-mono": ["JetBrains Mono", "monospace"]
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .icon-fill { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(114, 119, 133, 0.2); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(114, 119, 133, 0.4); }
+        .selection\:bg-primary\/20 ::selection { background-color: rgba(59, 130, 246, 0.2); }
+    </style>
 </head>
-<body>
+<body class="bg-background text-on-background font-body-md h-screen overflow-hidden">
   <div id="root"></div>
   <script type="module" src="/src/main.jsx"></script>
 </body>

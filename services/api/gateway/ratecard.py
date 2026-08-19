@@ -70,6 +70,30 @@ _RATE_CARD: dict[str, ModelPrice] = {
         cache_read_micro_per_token=4,
         cache_write_micro_per_token=19,
     ),
+    "gemini-3.1-flash": ModelPrice(
+        input_micro_per_token=1,
+        output_micro_per_token=3,
+        cache_read_micro_per_token=1,
+        cache_write_micro_per_token=1,
+    ),
+    "gemini-3.5-flash": ModelPrice(
+        input_micro_per_token=1,
+        output_micro_per_token=3,
+        cache_read_micro_per_token=1,
+        cache_write_micro_per_token=1,
+    ),
+    "gemini-3.1-pro": ModelPrice(
+        input_micro_per_token=2,
+        output_micro_per_token=5,
+        cache_read_micro_per_token=1,
+        cache_write_micro_per_token=1,
+    ),
+    "gemini-3.5-pro": ModelPrice(
+        input_micro_per_token=2,
+        output_micro_per_token=5,
+        cache_read_micro_per_token=1,
+        cache_write_micro_per_token=1,
+    ),
     "gemini-2.5-flash": ModelPrice(
         input_micro_per_token=1,
         output_micro_per_token=3,

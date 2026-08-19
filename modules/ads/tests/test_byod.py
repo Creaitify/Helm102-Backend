@@ -338,3 +338,133 @@ def test_parse_gaql_response():
     assert snapshot.campaigns[1].roas == 4.0  # 80000 / 20000
     assert snapshot.campaigns[1].cpa_inr == 100.0
     assert snapshot.campaigns[1].ctr == 8.0
+
+
+# ---------------------------------------------------------------------------
+# Metric Auto-Derivations & Multi-Platform Synthesis Unit Tests
+# ---------------------------------------------------------------------------
+
+def test_parse_csv_spend_auto_derivation_from_clicks_and_cpc():
+    """Verify spend is auto-derived when spend column is omitted but clicks and cpc are present."""
+    csv_content = """campaign_name,clicks,cpc,conversions,roas,impressions
+Search Intent,500,2.50,25,3.0,10000
+"""
+    snapshot = parse_csv(csv_content)
+    assert len(snapshot.campaigns) == 1
+    camp = snapshot.campaigns[0]
+    # spend_inr = round(500 * 2.50, 2) = 1250.0
+    assert camp.spend_inr == 1250.0
+    assert camp.roas == 3.0
+    # cpa = 1250 / 25 = 50.0
+    assert camp.cpa_inr == 50.0
+    # ctr = (500 / 10000) * 100 = 5.0
+    assert camp.ctr == 5.0
+
+
+def test_parse_csv_chained_metric_derivation():
+    """Verify chained derivation: spend derived from clicks*cpc, then roas derived from revenue/spend."""
+    csv_content = """campaign_name,clicks,cpc,conversions,revenue,impressions
+Growth Scale,800,1.75,40,4200.0,20000
+"""
+    snapshot = parse_csv(csv_content)
+    assert len(snapshot.campaigns) == 1
+    camp = snapshot.campaigns[0]
+    # spend = round(800 * 1.75, 2) = 1400.0
+    assert camp.spend_inr == 1400.0
+    # roas = round(4200.0 / 1400.0, 2) = 3.0
+    assert camp.roas == 3.0
+    # cpa = round(1400.0 / 40, 2) = 35.0
+    assert camp.cpa_inr == 35.0
+
+
+def test_parse_csv_decimal_ctr_scaling_and_explicit_percentage():
+    """Verify decimal CTRs (e.g. 0.0353 -> 3.53%) and explicit percentage strings (0.85% -> 0.85)."""
+    csv_content = """campaign_name,spend,clicks,conversions,roas,ctr
+Decimal CTR Camp,10000,353,50,2.5,0.0353
+Percent CTR Camp,10000,85,20,1.8,0.85%
+Standard CTR Camp,10000,500,60,3.2,5.0
+"""
+    snapshot = parse_csv(csv_content)
+    assert len(snapshot.campaigns) == 3
+    assert snapshot.campaigns[0].ctr == 3.53
+    assert snapshot.campaigns[1].ctr == 0.85
+    assert snapshot.campaigns[2].ctr == 5.0
+
+
+def test_parse_csv_intelligent_campaign_name_synthesis():
+    """Verify campaign names and slug IDs are synthesized when campaign_name is missing."""
+    csv_content = """platform,campaign_type,industry,country,impressions,clicks,cpc,conversions,revenue
+TikTok Ads,Search,EdTech,UK,100000,4000,1.25,200,15000.0
+Google Ads,Video,Fintech,UAE,50000,2000,2.00,100,12000.0
+Meta Ads,Shopping,SaaS,Germany,80000,3000,1.50,150,18000.0
+"""
+    snapshot = parse_csv(csv_content)
+    assert len(snapshot.campaigns) == 3
+
+    c0 = snapshot.campaigns[0]
+    assert c0.platform == Platform.TIKTOK_ADS
+    assert c0.campaign_name == "[TikTok Ads] Search - EdTech (UK)"
+    assert c0.campaign_id == "cmp_tiktok_ads_search_edtech_uk_1"
+    assert c0.spend_inr == 5000.0  # 4000 * 1.25
+    assert c0.roas == 3.0  # 15000 / 5000
+
+    c1 = snapshot.campaigns[1]
+    assert c1.platform == Platform.GOOGLE_ADS
+    assert c1.campaign_name == "[Google Ads] Video - Fintech (UAE)"
+    assert c1.campaign_id == "cmp_google_ads_video_fintech_uae_2"
+
+    c2 = snapshot.campaigns[2]
+    assert c2.platform == Platform.META_ADS
+    assert c2.campaign_name == "[Meta Ads] Shopping - SaaS (Germany)"
+    assert c2.campaign_id == "cmp_meta_ads_shopping_saas_germany_3"
+
+
+def test_parse_json_parity_with_csv_derivations():
+    """Verify JSON parsing implements identical metric derivations and name synthesis as CSV."""
+    from modules.ads.byod_importer import parse_json
+
+    json_payload = [
+        {
+            "platform": "TikTok Ads",
+            "campaign_type": "Search",
+            "industry": "EdTech",
+            "country": "UK",
+            "clicks": 1000,
+            "cpc": 2.0,
+            "conversions": 50,
+            "revenue": 6000.0,
+            "ctr": 0.045,
+            "impressions": 22222,
+        }
+    ]
+    snapshot = parse_json(json_payload)
+    assert len(snapshot.campaigns) == 1
+    c = snapshot.campaigns[0]
+    assert c.platform == Platform.TIKTOK_ADS
+    assert c.campaign_name == "[TikTok Ads] Search - EdTech (UK)"
+    assert c.campaign_id == "cmp_tiktok_ads_search_edtech_uk_1"
+    assert c.spend_inr == 2000.0
+    assert c.roas == 3.0
+    assert c.cpa_inr == 40.0
+    assert c.ctr == 4.5
+
+
+def test_parse_300_plus_sample_multichannel_campaigns_file():
+    """Verify sample_multichannel_campaigns.csv contains 300+ coherent rows and parses cleanly."""
+    csv_file = Path("services/api/data/sample_multichannel_campaigns.csv")
+    assert csv_file.is_file()
+    snapshot = parse_csv(csv_file)
+
+    assert len(snapshot.campaigns) >= 300
+    assert snapshot.total_spend_inr > 0
+    assert snapshot.blended_roas > 0
+
+    platforms = {c.platform for c in snapshot.campaigns}
+    assert Platform.GOOGLE_ADS in platforms
+    assert Platform.META_ADS in platforms
+    assert Platform.TIKTOK_ADS in platforms
+
+    # Ensure all campaign IDs are unique
+    camp_ids = [c.campaign_id for c in snapshot.campaigns]
+    assert len(camp_ids) == len(set(camp_ids))
+

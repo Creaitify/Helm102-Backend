@@ -135,8 +135,13 @@ export function DataSourcesScreen() {
                     >
                       <td className="px-3 py-2 text-on-surface font-medium">{campaign.campaign_name}</td>
                       <td className="px-3 py-2 text-on-surface-variant">
-                        {{ google_ads: 'Google Ads', meta_ads: 'Meta' }[campaign.platform] ||
-                          campaign.platform}
+                        {{
+                          google_ads: 'Google Ads',
+                          meta_ads: 'Meta Ads',
+                          tiktok_ads: 'TikTok Ads',
+                          linkedin_ads: 'LinkedIn Ads',
+                          byod: 'Imported',
+                        }[campaign.platform] || campaign.platform}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">{formatINR(campaign.spend_inr)}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{campaign.roas}x</td>

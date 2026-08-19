@@ -27,9 +27,14 @@ node_modules/
 dist/
 .next/
 
+# Server logs from the local launcher
+server.out.log
+server.err.log
+
 # Test & scratch artifacts
 .pytest_cache/
 scratch/
+coverage/
 
 # Vendored third-party clones (fetched separately — see README)
 external/

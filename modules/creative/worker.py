@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Any
 from modules.creative.schema import (
+    CREATIVE_PACKAGE_SCHEMA,
     AdCreative,
     CreativeBrief,
     CreativePackage,
@@ -93,15 +94,32 @@ class CreativeWorker:
                 Message(role=Role.USER, content=prompt),
             ],
             system_cacheable="Brand Voice: Modern, trustworthy, transparent, high-converting.",
+            # Structured outputs plus a real budget. Without both, adaptive
+            # thinking consumed the old 4096-token default and truncated the
+            # JSON mid-object, silently demoting every run to the template.
+            max_tokens=16000,
+            json_schema=CREATIVE_PACKAGE_SCHEMA,
         )
 
         try:
             response = await self.gateway.generate(request)
-            data = self._parse_or_fallback(response.content, objective)
-            return data
         except Exception as exc:
-            logger.warning("Gateway call failed or returned unstructured response: %s", exc)
+            logger.warning(
+                "Creative generation fell back to the deterministic package "
+                "— gateway call failed: %s",
+                exc,
+            )
             return self._build_deterministic_package(objective)
+
+        package = self._parse_or_fallback(response.content, objective)
+        if package.generation_mode != "llm":
+            logger.warning(
+                "Creative generation fell back to the deterministic package "
+                "— unparseable model output (stop_reason=%s, %d chars).",
+                getattr(response.stop_reason, "value", response.stop_reason),
+                len(response.content or ""),
+            )
+        return package
 
     def _parse_or_fallback(self, content: str, objective: str) -> CreativePackage:
         """Parse LLM JSON output or fallback to structured default."""
@@ -169,7 +187,8 @@ class CreativeWorker:
             )
 
             return CreativePackage(brief=brief, script=script, creative=creative, captions=captions, generation_mode="llm")
-        except Exception:
+        except Exception as exc:
+            logger.warning("Could not parse creative package JSON: %s", exc)
             return self._build_deterministic_package(objective)
 
     def _build_deterministic_package(self, objective: str) -> CreativePackage:

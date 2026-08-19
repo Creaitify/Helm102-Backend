@@ -65,6 +65,21 @@ orchestrator = GovernorOrchestrator(
 
 app.include_router(oauth.router)
 
+# Conversation / agent / report surfaces used by the console.
+from services.api import agents, chat, conversations, dashboard, reports
+
+agents.configure(gateway=gateway, connector=connector, orchestrator=orchestrator)
+reports.configure(gateway=gateway, connector=connector)
+dashboard.configure(connector=connector, checkpointer=checkpointer)
+conversations.init_db()
+reports.init_db()
+
+app.include_router(agents.router)
+app.include_router(chat.router)
+app.include_router(conversations.router)
+app.include_router(dashboard.router)
+app.include_router(reports.router)
+
 # Keep strong references to background run tasks so they aren't GC'd mid-run.
 _background_runs: set[asyncio.Task] = set()
 
@@ -413,6 +428,71 @@ def get_current_synthetic_snapshot() -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+
+
+@app.get("/api/dashboard/stats")
+def dashboard_stats() -> dict[str, Any]:
+    """Quick stats for the console's right rail, computed from real data."""
+    try:
+        snapshot = connector.fetch_campaigns()
+    except Exception as exc:
+        logger.warning("Dashboard stats fetch failed: %s", exc)
+        return {
+            "active_campaigns": 0,
+            "total_spend_inr": 0.0,
+            "blended_roas": 0.0,
+            "pending_approvals": 0,
+            "data_source": "degraded",
+            "error": str(exc),
+        }
+
+    checkpoints = checkpointer.list_checkpoints()
+    pending = sum(1 for c in checkpoints if c.get("status") == "pending_approval")
+
+    return {
+        "active_campaigns": sum(
+            1 for c in snapshot.campaigns if str(c.status).upper() in ("ENABLED", "ACTIVE")
+        ),
+        "total_campaigns": len(snapshot.campaigns),
+        "total_spend_inr": snapshot.total_spend_inr,
+        "blended_roas": snapshot.blended_roas,
+        "pending_approvals": pending,
+        "total_runs": len(checkpoints),
+        "data_source": snapshot.source,
+        "data_source_label": {
+            "live": "Live platform API",
+            "synthetic": "Synthetic dataset",
+            "byod": "Imported dataset",
+            "degraded": "Degraded — fetch failed",
+        }.get(snapshot.source, snapshot.source),
+    }
+
+
+@app.post("/api/connections/verify")
+def verify_connections() -> dict[str, Any]:
+    """Probe each connected ad platform and report what actually answered.
+
+    This is what makes the Settings screen trustworthy: it reports a live
+    handshake, not merely the presence of stored credentials.
+    """
+    results: dict[str, Any] = {}
+
+    for platform, builder in (
+        ("google_ads", connector._build_google_client),
+        ("meta_ads", connector._build_meta_client),
+    ):
+        if not connector.secret_store.has_credentials(platform):
+            results[platform] = {"connected": False, "reason": "No credentials stored"}
+            continue
+        try:
+            results[platform] = builder().verify()
+        except Exception as exc:
+            results[platform] = {"connected": False, "reason": str(exc)}
+
+    return {
+        "platforms": results,
+        "data_source": "live" if any(r.get("connected") for r in results.values()) else "synthetic",
+    }
 
 
 # Mount Web Console frontend (React SPA)

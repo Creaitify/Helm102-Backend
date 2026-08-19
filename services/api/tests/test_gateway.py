@@ -80,10 +80,14 @@ def test_provider_switching_and_keys(monkeypatch):
     assert get_active_provider() == "gemini"
     assert get_model_for_provider("gemini") == "gemini-2.5-flash"
 
-    # Test Anthropic routing
+    # Test Anthropic routing. HELM pins the strongest model for every task —
+    # its outputs drive real budget decisions, so nothing gets a cheap tier.
     monkeypatch.setenv("HELM_LLM_PROVIDER", "anthropic")
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
     assert get_active_provider() == "anthropic"
-    assert get_model_for_provider("anthropic") == "claude-3-5-sonnet-20241022"
+    assert get_model_for_provider("anthropic") == "claude-opus-5"
+    # There is no downgraded "fast" tier: every task routes to the same model.
+    assert get_model_for_provider("anthropic", fast=True) == "claude-opus-5"
 
 
 @pytest.mark.asyncio

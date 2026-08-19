@@ -37,9 +37,22 @@ def has_gemini_api_key() -> bool:
     return bool(key and len(key.strip()) > 0)
 
 
+DEFAULT_ANTHROPIC_MODEL = "claude-opus-5"
+
+
 def get_active_provider() -> str:
-    """Get active LLM provider ('gemini' | 'anthropic' | 'replay')."""
-    return os.environ.get("HELM_LLM_PROVIDER") or os.environ.get("DEFAULT_LLM_PROVIDER") or "gemini"
+    """Get active LLM provider ('anthropic' | 'gemini' | 'replay').
+
+    Anthropic is the default: HELM runs on Claude unless explicitly told
+    otherwise. If the configured provider has no key but Anthropic does, fall
+    through to Anthropic rather than silently degrading to replay.
+    """
+    configured = (
+        os.environ.get("HELM_LLM_PROVIDER") or os.environ.get("DEFAULT_LLM_PROVIDER") or "anthropic"
+    ).lower()
+    if configured == "gemini" and not has_gemini_api_key() and has_anthropic_api_key():
+        return "anthropic"
+    return configured
 
 
 def get_model_for_provider(provider: str, fast: bool = False) -> str:
@@ -50,8 +63,8 @@ def get_model_for_provider(provider: str, fast: bool = False) -> str:
             return os.environ.get("GEMINI_FAST_MODEL", "gemini-2.5-flash")
         return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
     elif provider == "anthropic":
-        if fast:
-            return os.environ.get("ANTHROPIC_FAST_MODEL", "claude-3-5-haiku-20241022")
-        return os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+        # Every task routes to the primary model — HELM's outputs drive real
+        # budget decisions, so no task gets a downgraded model.
+        return os.environ.get("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL)
     return "deterministic-replay-v1"
 

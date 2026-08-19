@@ -1,24 +1,24 @@
-"""Ad-Platform Connector Protocol and Mureo wrapper.
+"""Ad-Platform Connector Protocol and live-platform implementation.
 
-This is the SOLE module permitted to import `mureo`.
+This is the SOLE module that talks to ad platforms. It delegates to the
+dependency-light REST clients in `google_ads_client` / `meta_ads_client`.
 
 Design rules enforced here:
-- Real platform calls go through mureo clients built from `HelmSecretStore`
-  credentials (Google Cloud Console OAuth client + refresh token for Google,
-  Graph API access token for Meta). No `~/.mureo/` access, ever.
+- Real platform calls are built from `HelmSecretStore` credentials (Google
+  Cloud Console OAuth client + refresh token for Google, Graph API access
+  token for Meta). Credentials never leave server-side custody.
 - Data is always labelled honestly: `live` only when it actually came from a
   platform API; `synthetic` for the built-in dev dataset; `byod` for imported
   files; `degraded` when a live fetch failed.
-- Live writes either dispatch through mureo or fail with success=False.
+- Live writes either dispatch for real or fail with success=False.
   Nothing ever fabricates an "APPLIED" response.
 """
 
 from __future__ import annotations
 
-import asyncio
-import concurrent.futures
 import logging
-import re
+
+import httpx
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Protocol, runtime_checkable
 
@@ -32,12 +32,11 @@ from modules.ads.contracts import (
     MetricRow,
     Platform,
 )
+from modules.ads.google_ads_client import GoogleAdsClient
+from modules.ads.meta_ads_client import META_BASE, MetaAdsClient, MetaAdsError
 from services.api.auth.secret_store import HelmSecretStore
 
 logger = logging.getLogger(__name__)
-
-_GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
-
 
 @runtime_checkable
 class Connector(Protocol):
@@ -64,24 +63,8 @@ class Connector(Protocol):
         ...
 
 
-def _run_async(coro: Any) -> Any:
-    """Run a mureo coroutine from sync code, safe inside or outside a loop.
-
-    mureo clients are async; the Connector protocol is sync so the Governor,
-    executor, and tests stay simple. A dedicated thread with its own event
-    loop avoids `asyncio.run()` blowing up when we're already inside FastAPI's
-    running loop.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
-
-
 class MureoConnector:
-    """Connector implementation backed by logly/mureo."""
+    """Connector implementation backed by the Google Ads and Meta REST clients."""
 
     def __init__(self, secret_store: HelmSecretStore | None = None) -> None:
         self.secret_store = secret_store or HelmSecretStore()
@@ -90,52 +73,22 @@ class MureoConnector:
     # Client construction (Google Cloud Console OAuth / Meta Graph token)
     # ------------------------------------------------------------------
 
-    def _build_google_client(self) -> Any:
-        """Build mureo GoogleAdsApiClient from server-side custody credentials.
+    def _build_google_client(self) -> GoogleAdsClient:
+        """Build the Google Ads REST client from server-side custody credentials.
 
         Expected keys under `google_ads` in the secret store (all obtained
         from Google Cloud Console + Google Ads API Center):
           client_id, client_secret, refresh_token, developer_token,
           customer_id, login_customer_id (optional, for MCC accounts)
         """
-        creds = self.secret_store.load("google_ads")
-        required = ("client_id", "client_secret", "refresh_token", "developer_token", "customer_id")
-        missing = [k for k in required if not creds.get(k)]
-        if missing:
-            raise ConnectionError(f"google_ads credentials incomplete, missing: {', '.join(missing)}")
+        return GoogleAdsClient.from_credentials(self.secret_store.load("google_ads"))
 
-        from google.oauth2.credentials import Credentials  # transitive dep of mureo's google-ads SDK
-        from mureo.google_ads.client import GoogleAdsApiClient
-
-        oauth_credentials = Credentials(
-            token=None,
-            refresh_token=creds["refresh_token"],
-            client_id=creds["client_id"],
-            client_secret=creds["client_secret"],
-            token_uri=_GOOGLE_TOKEN_URI,
-        )
-        return GoogleAdsApiClient(
-            credentials=oauth_credentials,
-            customer_id=str(creds["customer_id"]),
-            developer_token=creds["developer_token"],
-            login_customer_id=creds.get("login_customer_id") or None,
-        )
-
-    def _build_meta_client(self) -> Any:
-        """Build mureo MetaAdsApiClient from server-side custody credentials.
+    def _build_meta_client(self) -> MetaAdsClient:
+        """Build the Meta Graph client from server-side custody credentials.
 
         Expected keys under `meta_ads`: access_token, ad_account_id (act_...).
         """
-        creds = self.secret_store.load("meta_ads")
-        if not creds.get("access_token") or not creds.get("ad_account_id"):
-            raise ConnectionError("meta_ads credentials incomplete, need access_token and ad_account_id")
-
-        from mureo.meta_ads.client import MetaAdsApiClient
-
-        return MetaAdsApiClient(
-            access_token=creds["access_token"],
-            ad_account_id=creds["ad_account_id"],
-        )
+        return MetaAdsClient.from_credentials(self.secret_store.load("meta_ads"))
 
     def connection_status(self) -> dict[str, Any]:
         """Which platforms have credentials stored (server-side custody)."""
@@ -152,7 +105,7 @@ class MureoConnector:
     # ------------------------------------------------------------------
 
     def fetch_campaigns(self) -> CampaignSnapshot:
-        """Fetch campaign metrics. Live via mureo when connected, else synthetic."""
+        """Fetch campaign metrics. Live from the platform APIs when connected, else synthetic."""
         has_google = self.secret_store.has_credentials("google_ads")
         has_meta = self.secret_store.has_credentials("meta_ads")
 
@@ -247,7 +200,7 @@ class MureoConnector:
             if has_google:
                 try:
                     rows.extend(
-                        self._fetch_google_rows(f"BETWEEN '{start.isoformat()}' AND '{end.isoformat()}'")
+                        self._fetch_google_rows(f"{start.isoformat()},{end.isoformat()}")
                     )
                 except Exception as exc:
                     logger.warning("Google history fetch (%s) failed: %s", label, exc)
@@ -270,85 +223,26 @@ class MureoConnector:
         return periods
 
     def _fetch_google_rows(self, period: str) -> list[MetricRow]:
-        """list_campaigns + performance report merged into MetricRows."""
-        client = self._build_google_client()
+        """Campaign performance for a period, straight from the Google Ads API.
 
-        async def _fetch() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-            campaigns = await client.list_campaigns(status_filter="ENABLED")
-            report = await client.get_performance_report(period=period)
-            return campaigns, report
-
-        campaigns, report = _run_async(_fetch())
-        perf_by_id = {str(r.get("campaign_id")): r.get("metrics", {}) for r in report}
-
-        rows: list[MetricRow] = []
-        for camp in campaigns:
-            cid = str(camp.get("id") or camp.get("campaign_id") or "")
-            m = perf_by_id.get(cid, {})
-            spend = float(m.get("cost", 0.0))
-            conversions = float(m.get("conversions", 0.0))
-            cpa = round(spend / conversions, 2) if conversions > 0 else 0.0
-            rows.append(
-                MetricRow(
-                    campaign_id=cid,
-                    campaign_name=str(camp.get("name", cid)),
-                    platform=Platform.GOOGLE_ADS,
-                    spend_inr=spend,
-                    impressions=int(m.get("impressions", 0)),
-                    clicks=int(m.get("clicks", 0)),
-                    conversions=int(conversions),
-                    # ROAS needs conversion value; the report carries cost per
-                    # conversion, so we surface conversions/cost efficiency and
-                    # leave roas 0.0 until conversion value tracking is wired.
-                    roas=0.0,
-                    cpa_inr=cpa,
-                    ctr=round(float(m.get("ctr", 0.0)) * 100, 2),
-                    status=str(camp.get("status", "ENABLED")),
-                )
-            )
-        return rows
+        `period` is a GAQL literal (`LAST_30_DAYS`) or `YYYY-MM-DD,YYYY-MM-DD`.
+        Conversion value comes back in the same query, so ROAS is real.
+        """
+        return self._build_google_client().fetch_campaign_metrics(date_range=period)
 
     def _fetch_meta_rows(self, period: str) -> list[MetricRow]:
-        """Meta account-level campaign insights into MetricRows."""
-        client = self._build_meta_client()
+        """Campaign-level Meta insights for a period.
 
-        async def _fetch() -> list[dict[str, Any]]:
-            try:
-                return await client.get_performance_report(period=period, level="campaign")
-            finally:
-                await client.close()
-
-        insights = _run_async(_fetch())
-
-        rows: list[MetricRow] = []
-        for ins in insights:
-            spend = float(ins.get("spend", 0.0) or 0.0)
-            clicks = int(ins.get("clicks", 0) or 0)
-            impressions = int(ins.get("impressions", 0) or 0)
-            conversions = _meta_action_count(ins.get("actions"), "offsite_conversion")
-            cpa = round(spend / conversions, 2) if conversions > 0 else 0.0
-            rows.append(
-                MetricRow(
-                    campaign_id=str(ins.get("campaign_id", "")),
-                    campaign_name=str(ins.get("campaign_name", "")),
-                    platform=Platform.META_ADS,
-                    spend_inr=spend,
-                    impressions=impressions,
-                    clicks=clicks,
-                    conversions=conversions,
-                    roas=0.0,  # purchase ROAS requires value tracking; wired later
-                    cpa_inr=cpa,
-                    ctr=float(ins.get("ctr", 0.0) or 0.0),
-                )
-            )
-        return rows
+        `period` is a Meta preset (`last_30d`) or `YYYY-MM-DD,YYYY-MM-DD`.
+        """
+        return self._build_meta_client().fetch_campaign_metrics(date_range=period)
 
     # ------------------------------------------------------------------
-    # Writes — dispatch through mureo or fail honestly. Never fabricate.
+    # Writes — dispatch for real or fail honestly. Never fabricate.
     # ------------------------------------------------------------------
 
     def apply_budget(self, shift: BudgetShift, dry_run: bool = True) -> ExecutionResult:
-        """Execute budget shift via mureo or dry-run preview."""
+        """Execute budget shift against the live platform, or preview it as a dry run."""
         payload = {
             "campaign_id": shift.campaign_id,
             "platform": shift.platform.value,
@@ -371,19 +265,9 @@ class MureoConnector:
 
         try:
             if shift.platform == Platform.META_ADS:
-                client = self._build_meta_client()
-
-                async def _apply_meta() -> dict[str, Any]:
-                    try:
-                        # Meta daily_budget is in the currency's minor units (paise for INR)
-                        return await client.update_campaign(
-                            shift.campaign_id,
-                            daily_budget=int(round(shift.proposed_daily_budget_inr * 100)),
-                        )
-                    finally:
-                        await client.close()
-
-                response = _run_async(_apply_meta())
+                response = self._build_meta_client().update_campaign_budget(
+                    shift.campaign_id, shift.proposed_daily_budget_inr
+                )
                 return ExecutionResult(
                     success=True,
                     platform=shift.platform,
@@ -395,37 +279,18 @@ class MureoConnector:
                 )
 
             if shift.platform == Platform.GOOGLE_ADS:
-                client = self._build_google_client()
-
-                async def _apply_google() -> dict[str, Any]:
-                    # Google budgets are separate resources: resolve the
-                    # campaign's real budget id first — no templated ids.
-                    campaigns = await client.list_campaigns()
-                    budget_resource = next(
-                        (
-                            c.get("campaign_budget")
-                            for c in campaigns
-                            if str(c.get("id") or c.get("campaign_id")) == str(shift.campaign_id)
-                        ),
-                        None,
-                    )
-                    if not budget_resource:
-                        raise RuntimeError(
-                            f"No campaign_budget resource found for campaign {shift.campaign_id}"
-                        )
-                    match = re.search(r"campaignBudgets/(\d+)", str(budget_resource))
-                    if not match:
-                        raise RuntimeError(f"Unrecognized budget resource: {budget_resource}")
-                    return await client.update_budget(
-                        {"budget_id": match.group(1), "amount": shift.proposed_daily_budget_inr}
-                    )
-
-                response = _run_async(_apply_google())
+                # Google budgets are separate resources: the client resolves the
+                # campaign's real budget resource first — no templated ids.
+                response = self._build_google_client().update_campaign_budget(
+                    shift.campaign_id, shift.proposed_daily_budget_inr
+                )
+                results = response.get("results", []) or []
+                resource_id = str(results[0].get("resourceName")) if results else shift.campaign_id
                 return ExecutionResult(
                     success=True,
                     platform=shift.platform,
                     action_type="UPDATE_CAMPAIGN_BUDGET",
-                    resource_id=str(response.get("resource_name", shift.campaign_id)),
+                    resource_id=resource_id,
                     payload_sent=payload,
                     response_received=response,
                     dry_run=False,
@@ -449,7 +314,7 @@ class MureoConnector:
         """Deploy creative variant: dry-run preview, or honest not-implemented.
 
         Live creative deployment needs an ad set + ad shell per platform
-        (mureo's creatives/ads mixins). Until that is wired, the live path
+        plus an ad + ad-creative per platform. Until that is wired, the live path
         reports failure — it never claims a deploy happened.
         """
         payload = {
@@ -483,13 +348,14 @@ class MureoConnector:
             response_received={"status": "NOT_IMPLEMENTED"},
             dry_run=False,
             error=(
-                "Live creative deployment is not wired yet: requires ad set "
-                "resolution and ad creation via mureo creatives/ads APIs."
+                "Live creative deployment is not wired yet: it requires ad set "
+                "resolution plus ad + ad-creative creation on each platform. "
+                "Dry-run previews the exact payload that would be dispatched."
             ),
         )
 
     def create_campaign(self, draft: CampaignDraft, dry_run: bool = True) -> ExecutionResult:
-        """Create a new campaign (PAUSED) via mureo after human approval."""
+        """Create a new campaign (PAUSED) on the platform after human approval."""
         payload = {
             "name": draft.name,
             "platform": draft.platform.value,
@@ -514,19 +380,23 @@ class MureoConnector:
         try:
             if draft.platform == Platform.META_ADS:
                 client = self._build_meta_client()
-
-                async def _create_meta() -> dict[str, Any]:
-                    try:
-                        return await client.create_campaign(
-                            name=draft.name,
-                            objective=draft.objective or "OUTCOME_TRAFFIC",
-                            status="PAUSED",  # new campaigns always start paused
-                            daily_budget=int(round(draft.daily_budget_inr * 100)),
-                        )
-                    finally:
-                        await client.close()
-
-                response = _run_async(_create_meta())
+                with httpx.Client(timeout=60.0) as http:
+                    resp = http.post(
+                        f"{META_BASE}/{client.ad_account_id}/campaigns",
+                        data={
+                            "name": draft.name,
+                            "objective": draft.objective or "OUTCOME_TRAFFIC",
+                            "status": "PAUSED",  # new campaigns always start paused
+                            "special_ad_categories": "[]",
+                            "daily_budget": int(round(draft.daily_budget_inr * 100)),
+                            "access_token": client.access_token,
+                        },
+                    )
+                if resp.status_code != 200:
+                    raise MetaAdsError(
+                        f"Meta campaign create failed ({resp.status_code}): {resp.text[:400]}"
+                    )
+                response = resp.json()
                 return ExecutionResult(
                     success=True,
                     platform=draft.platform,
@@ -538,18 +408,13 @@ class MureoConnector:
                 )
 
             if draft.platform == Platform.GOOGLE_ADS:
-                client = self._build_google_client()
-                response = _run_async(
-                    client.create_campaign({"name": draft.name, "channel_type": draft.channel_type})
-                )
-                return ExecutionResult(
-                    success=True,
-                    platform=draft.platform,
-                    action_type="CREATE_CAMPAIGN",
-                    resource_id=str(response.get("resource_name", draft.name)),
-                    payload_sent=payload,
-                    response_received=response,
-                    dry_run=False,
+                # Creating a Google campaign live requires provisioning a budget
+                # resource, a bidding strategy, and ad group shells first. Until
+                # those are wired, say so — never claim a campaign was created.
+                raise ConnectionError(
+                    "Live Google Ads campaign creation is not wired yet (needs budget "
+                    "resource + bidding strategy provisioning). Budget shifts on existing "
+                    "campaigns do dispatch live."
                 )
 
             raise ConnectionError(f"No live create path for platform {draft.platform.value}")
@@ -650,15 +515,5 @@ class MureoConnector:
         return rows
 
 
-def _meta_action_count(actions: Any, action_prefix: str) -> int:
-    """Sum Meta insight `actions` entries whose action_type starts with prefix."""
-    if not isinstance(actions, list):
-        return 0
-    total = 0.0
-    for entry in actions:
-        if isinstance(entry, dict) and str(entry.get("action_type", "")).startswith(action_prefix):
-            try:
-                total += float(entry.get("value", 0))
-            except (TypeError, ValueError):
-                continue
-    return int(total)
+# Preferred name for new code; `MureoConnector` stays for existing imports.
+PlatformConnector = MureoConnector

@@ -1,7 +1,12 @@
 # Project: HELM02 Governed Marketing Orchestration System
 
 ## Architecture
-HELM02 is a governed marketing orchestration platform combining a Governor-led star relay DAG, Gemini 2.5 LLM Gateway, 7 persistent React workspaces with Google Stitch styling, coherent SQLite synthetic datasets, deterministic SEBI compliance auditing, and human-in-the-loop signoff gates.
+HELM is a governed marketing operations control plane. A Governor-led star relay DAG drives
+six hops; a model gateway fronts Gemini/Anthropic with a cost ledger; a chat-first React
+console lets operators address the whole pipeline or any single specialist directly. Campaign
+data comes from live Google/Meta REST clients, coherent SQLite synthetic datasets, or an
+imported CSV — always labelled honestly. SEBI compliance is deterministic, budget moves are
+policy-bounded, and nothing dispatches without human approval.
 
 ### System Topology (Star Relay DAG)
 - **Central Hub**: `GovernorOrchestrator` (`modules/governor/orchestrator.py`)
@@ -51,6 +56,16 @@ HELM02 is a governed marketing orchestration platform combining a Governor-led s
 | 30 | Tier 3 Cross-Feature Tests | 12 integration tests (Full Star Relay, Checkpointer, HITL gate) | M5 | Survey | DONE |
 | 31 | Tier 4 Real-World Tests | 9 realistic scenarios (Decay signals, Winner scale, Provider switch) | M5 | Survey | DONE |
 | 32 | Forensic Integrity Audit | Static analysis, execution validation, and anti-cheating verification | M5 | Survey | DONE |
+| 33 | Direct Single-Agent Invocation | Address one specialist without paying for the full six-hop relay | M6 | Request | DONE |
+| 34 | Agent Display Grammar | Agents emit typed blocks; one renderer covers every agent | M6 | Request | DONE |
+| 35 | Conversation Persistence | SQLite-backed threads; reopening replays stored render payloads | M6 | Request | DONE |
+| 36 | Unified Chat Endpoint | One prompt in, a persisted two-sided exchange out | M6 | Request | DONE |
+| 37 | Analysis Report Engine | Point-in-time account documents with Markdown export | M6 | Request | DONE |
+| 38 | Google Ads REST Client | Direct API client (OAuth refresh, GAQL searchStream, budget mutate) | M6 | Request | DONE |
+| 39 | Meta Marketing REST Client | Direct Graph API client for insights and budget writes | M6 | Request | DONE |
+| 40 | Live Connection Verification | Real handshake probe, not merely "credentials present" | M6 | Request | DONE |
+| 41 | Stitch Control-Plane Console | Chat-first shell: nav rail, thread, agent status rail, composer | M6 | Request | DONE |
+| 42 | Frontend Render Test Suite | Mounts the real shell against a stubbed API; covers every block type | M6 | Request | DONE |
 
 ---
 
@@ -63,6 +78,7 @@ HELM02 is a governed marketing orchestration platform combining a Governor-led s
 | 3 | Synthetic Engine, SEBI & Budget | SQLite Synthetic Engine, Ad-Ops Analyst, SEBI Verifier, Budget Optimizer, HITL Gate | M1, M2 | DONE | `services/api/db/`, `modules/compliance/`, `modules/budget/`, `modules/ads/` |
 | 4 | Persistent React Workspaces | 7 Workspaces, Non-Vanishing Store, Google Stitch Theme, Vite Build | M1, M2, M3 | DONE | `apps/web/src/components/workspaces/`, `HelmStore.jsx`, `styles.css` |
 | 5 | Full Integration & Test Pass | 4-Tier Test Suite (168/168 passing), Vite Bundle Build, Forensic Integrity Audit | M1, M2, M3, M4 | DONE | 168 passed tests in 4.07s, clean Vite bundle, CLEAN audit verdict |
+| 6 | Control Plane & Live Data | Direct agents, chat/conversation persistence, reports, real Google/Meta clients, console rewrite | M1-M5 | DONE | 210 backend + 13 frontend tests passing; `apps/web/src/`, `services/api/{agents,chat,conversations,reports}.py`, `modules/ads/{google,meta}_ads_client.py` |
 
 ---
 
@@ -91,57 +107,52 @@ HELM02 is a governed marketing orchestration platform combining a Governor-led s
 ## Code Layout
 
 ```text
-c:\Users\hp\HELM02\
-├── apps/
-│   └── web/                               # React 18 + Vite 6.0.3 SPA
-│       ├── src/
-│       │   ├── components/workspaces/     # 7 Agent Workspaces
-│       │   │   ├── GovernorWorkspace.jsx
-│       │   │   ├── AdOpsWorkspace.jsx
-│       │   │   ├── CreativeWorkspace.jsx
-│       │   │   ├── ComplianceWorkspace.jsx
-│       │   │   ├── BudgetWorkspace.jsx
-│       │   │   ├── ExecutionWorkspace.jsx
-│       │   │   └── AuditWorkspace.jsx
-│       │   ├── context/
-│       │   │   └── HelmStore.jsx          # Non-vanishing localStorage store
-│       │   ├── App.jsx
-│       │   └── main.jsx
-│       ├── styles.css                     # Google Stitch White & Royal Blue Tokens
-│       └── package.json
-├── services/
-│   └── api/                               # FastAPI Backend Service
-│       ├── main.py                        # REST Endpoints
-│       ├── gateway/                       # Gemini 2.5 Model Gateway & Ledger
-│       │   ├── service.py
-│       │   ├── ledger.py
-│       │   ├── ratecard.py
-│       │   └── adapters/gemini.py
-│       ├── db/                            # SQLite Persistence & Synthetic Engine
-│       │   ├── synthetic_sqlite.py
-│       │   ├── models.py
-│       │   └── repository.py
-│       └── knowledge/
-│           └── citations.py               # SEBI Citation Engine & Grounding
-├── modules/                               # Specialized Worker Modules
-│   ├── governor/                          # Star Relay Orchestrator & Checkpointer
-│   │   ├── orchestrator.py
-│   │   ├── checkpoint.py
-│   │   └── envelope.py
-│   ├── ads/                               # Ad-Ops Connector, Analyst, BYOD, GAQL
-│   │   ├── connector.py
-│   │   ├── analyst.py
-│   │   └── byod_importer.py
-│   ├── creative/                          # 4-Stage Creative Studio
-│   │   ├── worker.py
-│   │   └── schema.py
-│   ├── compliance/                        # Deterministic SEBI Verifier
-│   │   └── verifier.py
-│   ├── budget/                            # Policy-Bounded Optimizer (±25%)
-│   │   └── optimizer.py
-│   ├── execution/                         # Gated Execution Engine
-│   │   └── executor.py
-│   └── audit/                             # Append-Only Envelope Trail
-│       └── trail.py
-└── tests/ & modules/*/tests/ & services/*/tests/ # 168 Automated Test Suite (Tiers 1-4)
+HELM/
+├── apps/web/                              # React 18 + Vite + Tailwind console
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── blocks/BlockRenderer.jsx   # Renders the agent display grammar
+│   │   │   ├── Sidebar.jsx                # Dark nav rail: history + resources
+│   │   │   ├── TopBar.jsx                 # Search, grounding, model selector
+│   │   │   ├── AgentRail.jsx              # Agent status + approval gate
+│   │   │   ├── MessageThread.jsx          # Conversation turns and sources
+│   │   │   ├── Composer.jsx               # Mode selector + prompt input
+│   │   │   └── ui.jsx                     # Chips, buttons, INR formatting
+│   │   ├── screens/                       # Chat, Reports, Settings,
+│   │   │                                  #   DataSources, PromptLibrary, Audit
+│   │   ├── __tests__/app.test.jsx         # Render smoke tests (vitest + jsdom)
+│   │   ├── store.jsx                      # Single source of truth
+│   │   ├── api.js                         # REST wrapper with honest errors
+│   │   └── styles.css                     # Tailwind layers + design tokens
+│   └── tailwind.config.js                 # Stitch "Autonomous Control Plane" tokens
+│
+├── services/api/
+│   ├── main.py                            # Wiring, health, stats, connection verify
+│   ├── agents.py                          # Direct single-agent invocation
+│   ├── chat.py                            # Unified send-path
+│   ├── conversations.py                   # Thread + message persistence
+│   ├── reports.py                         # Report generation & Markdown export
+│   ├── gateway/                           # Model gateway, adapters, cost ledger
+│   ├── db/synthetic_sqlite.py             # Coherent synthetic datasets
+│   ├── knowledge/citations.py             # SEBI citation grounding
+│   └── auth/                              # OAuth flow + server-side secret store
+│
+├── modules/
+│   ├── governor/                          # Star-relay orchestrator, checkpointer
+│   ├── ads/
+│   │   ├── connector.py                   # Platform protocol + honest labelling
+│   │   ├── google_ads_client.py           # Direct Google Ads REST client
+│   │   ├── meta_ads_client.py             # Direct Meta Graph client
+│   │   ├── analyst.py                     # Scoring, decay detection, synthesis
+│   │   ├── byod_importer.py               # CSV / Excel ingestion
+│   │   └── gaql.py                        # GAQL builders and parsers
+│   ├── creative/                          # 4-stage creative pipeline
+│   ├── compliance/                        # Deterministic SEBI verifier
+│   ├── budget/                            # Policy-bounded optimizer (±25%)
+│   ├── execution/                         # Gated platform executor
+│   └── audit/                             # Append-only envelope trail
+│
+└── scripts/
+    ├── serve.py                           # API server
+    └── dev.py                             # Build console if stale, then serve
 ```

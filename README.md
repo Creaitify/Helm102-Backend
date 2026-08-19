@@ -1,62 +1,225 @@
-# HELM — Governed Marketing Orchestration System
+# HELM — Autonomous Marketing Operations Control Plane
 
-Governor-led, star-topology marketing orchestration: ingest ad performance
-(Google Ads / Meta via [mureo](https://github.com/logly/mureo), BYOD, or a
-SQLite synthetic engine), analyze what works over past data, generate
-SEBI-gated creative, propose budget shifts and new campaigns — and execute
-only after explicit human approval, with a full audit trail.
+A marketing intelligence platform for financial-services advertising. Five Claude-powered
+specialists analyze campaign performance, write compliant creative, propose budget
+reallocation inside a hard policy envelope, and stop at a human approval gate before
+anything reaches a real ad platform. Every hop lands in an append-only audit trail.
 
-## Architecture
+Runs on synthetic data out of the box. Connect a Google Ads or Meta account and the same
+agents reason over your real campaigns.
 
-- **Governor star relay** (`modules/governor/`) — every hop is a typed
-  `HandoffEnvelope`; no agent-to-agent edges; per-hop SQLite checkpoints power
-  live progress streaming (SSE).
-- **Ads connector** (`modules/ads/`) — the ONLY module allowed to import
-  mureo. Data is always labelled honestly: `live` / `byod` / `synthetic` /
-  `degraded`. Live writes dispatch through mureo or fail visibly.
-- **Analyst** (`modules/ads/analyst.py`) — deterministic what-works ranking,
-  decay detection over current-vs-prior periods, budget direction, and new
-  campaign drafts (created PAUSED, behind approval).
-- **Creative / Compliance / Budget / Execution / Audit** — 4-stage creative
-  via the model gateway, deterministic SEBI verifier with loopback, ±25%
-  budget cap with conservation, dry-run-first execution engine, append-only
-  audit trail.
-- **Model gateway** (`services/api/gateway/`) — sole LLM egress (Gemini /
-  Anthropic / replay), token ledger, kill switch.
-- **Web console** (`apps/web/`) — React SPA: seven agent workspaces, live
-  SSE-driven star relay with per-hop timers, HITL approval gate.
+**Every agent runs on Claude Opus 5.** There is no model picker: HELM outputs drive real
+budget decisions, so no task is silently downgraded to a cheaper tier.
+
+---
 
 ## Quick start
 
 ```bash
+# 1. Python environment
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt   # see "External deps" first
-cp .env.example .env                            # add your keys
+.venv\Scripts\activate            # Windows
+# source .venv/bin/activate       # macOS / Linux
+pip install -r requirements.txt
+
+# 2. Frontend
 cd apps/web && npm install && npm run build && cd ../..
-.venv/Scripts/python scripts/serve.py           # http://127.0.0.1:8000
+
+# 3. Run
+python scripts/serve.py
 ```
 
-### External deps
+Open **http://127.0.0.1:8000** — the API serves the built console at the root.
 
-`requirements.txt` installs mureo from a local clone. Fetch it first:
+For frontend development with hot reload, run the API and Vite side by side:
 
 ```bash
-git clone --depth 1 --branch v0.10.47 https://github.com/logly/mureo external/mureo
+python scripts/serve.py          # terminal 1 — API on :8000
+cd apps/web && npm run dev       # terminal 2 — console on :3000, proxies /api
 ```
 
-### Tests
+Set your Anthropic key in `.env` to enable agent reasoning:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+HELM_LLM_PROVIDER=anthropic
+ANTHROPIC_MODEL=claude-opus-5
+```
+
+Without a key the gateway runs in **replay mode**: metrics, compliance verdicts, and budget
+math are still computed for real, and only the narrative prose comes from deterministic
+templates. The console labels that state honestly rather than passing templates off as
+model output.
+
+---
+
+## The platform
+
+| Screen | What it is for |
+| --- | --- |
+| **Command Center** | The account at a glance: KPIs with period-over-period deltas, a trend chart, channel split, alert feed, and the ranked campaign table |
+| **Agents** | A dedicated console per specialist, each with one-click tasks it is genuinely good at |
+| **Pipeline** | Run the six-hop governed relay, watch it advance live, then approve or reject the proposal |
+| **Reports** | Generate a full account analysis and download it as a standalone file |
+| **Data Sources** | Swap synthetic scenarios, inspect the loaded dataset, import a CSV |
+| **Audit Trail** | Every run, every hop envelope, with the raw payload |
+| **Settings** | Connect ad accounts and inspect system state |
+
+### The five specialists
+
+| Agent | What it does |
+| --- | --- |
+| **Analyst** | Diagnoses performance: what drives it, what is decaying, what to change — with quantified expected impact per action |
+| **Media Buyer** | Proposes budget reallocation inside the ±25% envelope, justifying each shift against that campaign's numbers |
+| **Creative** | Writes three genuinely distinct ad angles, each independently run through the SEBI verifier |
+| **Compliance** | Scans copy against the rulebook, explains each violation in plain English, and supplies a compliant rewrite |
+| **Governor** | Orchestrates all of the above into one proposal for approval |
+
+### How the agents stay trustworthy
+
+The split is strict and enforced in code:
+
+- **Deterministic Python owns the facts and the guardrails** — metrics, decay detection, the
+  ±25% cap, budget conservation, and the SEBI rulebook. A model never moves a number or
+  clears a policy.
+- **Claude owns the judgement** — what is happening, why it matters, what to do, what the risk
+  is. It reasons over facts it is handed and is told not to recompute them.
+
+If the model is unreachable, agents fall back to deterministic output and the console says
+so. It never silently substitutes a template for reasoning.
+
+### The report file
+
+**Reports → Generate report → Download report (HTML)** produces a self-contained document —
+every style inlined, nothing fetched at open time — so it renders identically on a machine
+that has never seen this server, and prints cleanly. Markdown export and a print view are
+also available.
+
+---
+
+## Connecting real Google Ads data
+
+The live path uses the Google Ads REST API directly (no vendor SDK). Credentials are held
+in server-side custody — the browser only ever sees masked status.
+
+1. **Google Cloud Console** → create an OAuth client of type *Web application* with the
+   redirect URI `http://127.0.0.1:8000/api/oauth/google/callback`.
+2. Put the client id/secret in `.env` (copy `.env.example`) and restart the server:
+   ```
+   GOOGLE_OAUTH_CLIENT_ID=...
+   GOOGLE_OAUTH_CLIENT_SECRET=...
+   ```
+3. **Settings → Google Ads → Start Google consent flow** — the callback captures a refresh
+   token into the secret store.
+4. Add your **developer token** (Google Ads API Center) and **customer ID**, then hit
+   **Verify connections**. A green result means a real handshake succeeded, not merely that
+   credentials were saved.
+
+Once connected, `data_source` flips from `synthetic` to `live` and every agent reads your
+account. ROAS is computed from `metrics.conversions_value`, so it reflects real revenue.
+
+**Meta Ads** works the same way with a Graph API access token and an `act_...` account id.
+
+### Writes are gated twice
+
+- Nothing dispatches without an explicit human **Approve**.
+- Even then, `HELM_ADS_DRY_RUN=true` (the default) previews the exact payload instead of
+  sending it. Set it to `false` only when you intend real budget changes.
+
+Approved Google budget shifts resolve the campaign's real `campaignBudget` resource and
+mutate `amount_micros`. Live *campaign creation* on Google is deliberately not wired — it
+reports that honestly rather than claiming a campaign was created.
+
+---
+
+## Architecture
+
+```
+apps/web/                     React 18 + Vite + Tailwind platform
+  src/components/Charts.jsx   Hand-built SVG charts (no charting library)
+  src/components/blocks/      Renders the agent display grammar
+  src/components/Shell.jsx    Navigation rail + context bar
+  src/screens/                Overview, Agents, Pipeline, Reports, Data, Audit, Settings
+  src/store.jsx               Single source of truth; server owns the data
+
+services/api/
+  main.py                     App wiring, health, connection verify
+  dashboard.py                Command Center payload in one request
+  intelligence.py             The reasoning layer: prompts + output schemas per agent
+  agents.py                   Direct single-agent invocation
+  chat.py                     One prompt in, a persisted exchange out
+  conversations.py            SQLite conversation + message persistence
+  reports.py                  Report generation, Markdown + HTML export
+  report_html.py              Self-contained HTML rendering
+  gateway/                    Model gateway: routing, adapters, cost ledger
+  db/synthetic_sqlite.py      Coherent multi-channel synthetic datasets
+  auth/                       OAuth flow + server-side secret store
+
+modules/
+  governor/                   Star-relay orchestrator, checkpointer, envelopes
+  ads/                        Connector, analyst, Google/Meta REST clients, BYOD, GAQL
+  creative/                   4-stage creative pipeline
+  compliance/                 Deterministic SEBI verifier
+  budget/                     Policy-bounded optimizer (±25%, conservation)
+  execution/                  Gated platform executor
+  audit/                      Append-only envelope trail
+```
+
+### The agent display grammar
+
+Agents don't return bespoke shapes. They emit a list of blocks:
+
+```json
+{ "blocks": [ { "type": "kpi_grid", ... }, { "type": "table", ... } ] }
+```
+
+`BlockRenderer` dispatches on `type` (`kpi_grid`, `table`, `bullets`, `variations`,
+`policy_check`, `stepper`, `text`). Adding an agent means emitting blocks, not writing a new
+React component — and an unrecognized type degrades to an inspectable dump instead of
+crashing the thread.
+
+---
+
+## Testing
 
 ```bash
-.venv/Scripts/python -m pytest
+python -m pytest -q                 # 210 backend tests
+cd apps/web && npm test             # 21 render + chart tests
 ```
 
-The suite forces replay mode (no live LLM calls, no ad-platform traffic).
+The frontend tests mount the real shell against a stubbed API and assert that every screen,
+every block type, and every chart renders — they stand in for a manual click-through.
 
-## Platform connections
+---
 
-Dev setup uses Google Cloud Console OAuth credentials + a Google Ads
-developer token, and a Meta Graph API token — entered via the console's
-Connections panel or `POST /api/connections/{google,meta}`. Credentials live
-in server-side custody (`HelmSecretStore`); `~/.mureo/` is never touched.
-`HELM_ADS_DRY_RUN=true` is the default — live writes require flipping it
-deliberately.
+## Key environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | — | Required for agent reasoning |
+| `ANTHROPIC_MODEL` | `claude-opus-5` | The model every agent uses |
+| `HELM_LLM_PROVIDER` | `anthropic` | `anthropic` \| `gemini` \| `replay` |
+| `HELM_ADS_DRY_RUN` | `true` | `false` dispatches real platform writes |
+| `HELM_SECRETS_DIR` | `services/api/data` | Where the credential vault lives |
+| `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | — | Google consent flow |
+| `HELM_PUBLIC_URL` | `http://127.0.0.1:8000` | Base for the OAuth redirect URI |
+| `PORT` | `8000` | API port |
+
+See `.env.example` for the full list.
+
+---
+
+## Honesty guarantees
+
+These are enforced in code and covered by tests:
+
+- Data is labelled `live` only when it actually came from a platform API. A failed live
+  fetch is labelled `degraded` — never dressed up as real or silently replaced with
+  synthetic numbers.
+- A failed run persists as `failed` with its error. Broken runs never vanish.
+- A live write either dispatches for real or returns `success=False`. Nothing ever
+  fabricates an "APPLIED" response.
+- Replay-mode answers are badged `Replay` in the UI so template prose is never mistaken for
+  model output.
+- A model is never allowed to alter a computed metric or overturn a policy verdict. It
+  receives the numbers as authoritative and is instructed not to recompute them.

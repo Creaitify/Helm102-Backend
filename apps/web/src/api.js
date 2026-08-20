@@ -53,14 +53,30 @@ export const api = {
   // --- Chat & agents ------------------------------------------------
   modes: () => request('/api/chat/modes'),
   agents: () => request('/api/agents'),
-  sendMessage: ({ prompt, mode, conversationId, grounded }, signal) =>
+  sendMessage: ({ prompt, mode, conversationId, grounded, fileContent, filename, file_content }, signal) =>
     request('/api/chat', {
       method: 'POST',
-      body: { prompt, mode, conversation_id: conversationId ?? null, grounded },
+      body: {
+        prompt,
+        mode,
+        conversation_id: conversationId ?? null,
+        grounded,
+        file_content: file_content || fileContent,
+        filename,
+      },
       signal,
     }),
-  invokeAgent: (agentId, { prompt, grounded }, signal) =>
-    request(`/api/agents/${agentId}/invoke`, { method: 'POST', body: { prompt, grounded }, signal }),
+  invokeAgent: (agentId, { prompt, grounded, fileContent, filename, file_content }, signal) =>
+    request(`/api/agents/${agentId}/invoke`, {
+      method: 'POST',
+      body: {
+        prompt,
+        grounded,
+        file_content: file_content || fileContent,
+        filename,
+      },
+      signal,
+    }),
 
   // --- Conversations ------------------------------------------------
   listConversations: () => request('/api/conversations'),
@@ -74,14 +90,23 @@ export const api = {
   // --- Runs & approvals ---------------------------------------------
   listRuns: () => request('/api/runs'),
   getRun: (id) => request(`/api/runs/${id}`),
-  startRun: (objective, wait = false) =>
-    request('/api/runs', { method: 'POST', body: { objective, wait } }),
+  startRun: (objective, wait = false, attachment = null) =>
+    request('/api/runs', {
+      method: 'POST',
+      body: {
+        objective,
+        wait,
+        file_content: attachment?.file_content || attachment?.fileContent || attachment?.content,
+        filename: attachment?.filename || attachment?.name,
+      },
+    }),
   submitApproval: (runId, decision, notes = '') =>
     request(`/api/runs/${runId}/approval`, {
       method: 'POST',
       body: { decision, decision_notes: notes },
     }),
   runAudit: (runId) => request(`/api/runs/${runId}/audit`),
+
 
   // --- Reports ------------------------------------------------------
   listReports: () => request('/api/reports'),
@@ -98,8 +123,17 @@ export const api = {
     request('/api/synthetic/generate', { method: 'POST', body: { scenario, days } }),
   currentSynthetic: () => request('/api/synthetic/current'),
   byodSample: () => request('/api/byod/sample'),
-  parseByod: (csvContent) =>
-    request('/api/byod/parse', { method: 'POST', body: { csv_content: csvContent } }),
+  parseByod: (csvContent, activate = true) =>
+    request('/api/byod/parse', { method: 'POST', body: { csv_content: csvContent, activate } }),
+  uploadByod: (fileContent, filename = 'uploaded_campaigns.csv', activate = true) =>
+    request('/api/byod/upload', {
+      method: 'POST',
+      body: { file_content: fileContent, filename, activate },
+    }),
+  ingestByodUrl: (url, activate = true) =>
+    request('/api/byod/url', { method: 'POST', body: { url, activate } }),
+  currentByod: () => request('/api/byod/current'),
+  clearByod: () => request('/api/byod/current', { method: 'DELETE' }),
 
   // --- Connections --------------------------------------------------
   connections: () => request('/api/connections'),

@@ -19,8 +19,17 @@ class GovernorCheckpointer:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
+    def _get_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=5000;")
+        except Exception:
+            pass
+        return conn
+
     def _init_db(self) -> None:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         try:
             with conn:
                 conn.execute("""
@@ -38,7 +47,7 @@ class GovernorCheckpointer:
     def save_checkpoint(self, run_id: str, status: str, hop_index: int, state: dict[str, Any]) -> None:
         """Save or update checkpoint state."""
         state_json = json.dumps(state)
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         try:
             with conn:
                 conn.execute("""
@@ -55,7 +64,7 @@ class GovernorCheckpointer:
 
     def load_checkpoint(self, run_id: str) -> dict[str, Any] | None:
         """Load state for a run."""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         try:
             cursor = conn.cursor()
             cursor.execute("SELECT state_json FROM checkpoints WHERE run_id = ?", (run_id,))
@@ -68,7 +77,7 @@ class GovernorCheckpointer:
 
     def list_checkpoints(self) -> list[dict[str, Any]]:
         """List all saved checkpoints."""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         try:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()

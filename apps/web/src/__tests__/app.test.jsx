@@ -9,7 +9,7 @@
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import App from '../App';
 import { HelmProvider } from '../store';
 import { BlockRenderer } from '../components/blocks/BlockRenderer';
@@ -208,8 +208,122 @@ describe('screen navigation', () => {
     }
     // The selected agent exposes one-click tasks, not just a text box.
     expect(await screen.findByText(/Which campaigns should I cut/)).toBeTruthy();
+    // Attachment button exists with appropriate label
+    expect(screen.getByLabelText(/Attach dataset/i)).toBeTruthy();
+  });
+
+  it('renders dataset attachment button on Pipeline screen', async () => {
+    localStorage.setItem('helm.prefs.v2', JSON.stringify({ screen: 'pipeline' }));
+    stubApi();
+    renderApp();
+    expect(await screen.findByText('Run the pipeline')).toBeTruthy();
+    expect(screen.getByText(/Attach dataset/i)).toBeTruthy();
+  });
+
+  it('handles file selection, attachment chip rendering, and removal on Agents screen', async () => {
+    localStorage.setItem('helm.prefs.v2', JSON.stringify({ screen: 'agents' }));
+    stubApi();
+    renderApp();
+    await screen.findByText(/Which campaigns should I cut/);
+
+    const fileInput = screen.getByLabelText(/Upload dataset/i);
+    const file = new File(['campaign_id,campaign_name\n1,Test'], 'test_campaigns.csv', {
+      type: 'text/csv',
+    });
+
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('test_campaigns.csv')).toBeTruthy();
+    });
+    expect(screen.getByTitle('Remove attachment')).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle('Remove attachment'));
+    expect(screen.queryByText('test_campaigns.csv')).toBeNull();
+  });
+
+  it('accepts and attaches .pdf files on Agents screen', async () => {
+    localStorage.setItem('helm.prefs.v2', JSON.stringify({ screen: 'agents' }));
+    stubApi();
+    renderApp();
+    await screen.findByText(/Which campaigns should I cut/);
+
+    const fileInput = screen.getByLabelText(/Upload dataset/i);
+    const pdfFile = new File(['%PDF-1.4 mock pdf text content'], 'marketing_brief.pdf', {
+      type: 'application/pdf',
+    });
+
+    fireEvent.change(fileInput, { target: { files: [pdfFile] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('marketing_brief.pdf')).toBeTruthy();
+    });
+    expect(screen.getByTitle('Remove attachment')).toBeTruthy();
+  });
+
+  it('handles drag and drop file upload on Agents screen', async () => {
+    localStorage.setItem('helm.prefs.v2', JSON.stringify({ screen: 'agents' }));
+    stubApi();
+    renderApp();
+    await screen.findByText(/Which campaigns should I cut/);
+
+    const form = screen.getByLabelText(/Ask Analyst/i).closest('form');
+    expect(form).toBeTruthy();
+
+    const file = new File(['mock excel content'], 'q3_metrics.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+
+    fireEvent.dragOver(form);
+    fireEvent.drop(form, {
+      dataTransfer: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('q3_metrics.xlsx')).toBeTruthy();
+    });
+  });
+
+  it('alerts and rejects unsupported file formats on Agents screen', async () => {
+    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    localStorage.setItem('helm.prefs.v2', JSON.stringify({ screen: 'agents' }));
+    stubApi();
+    renderApp();
+    await screen.findByText(/Which campaigns should I cut/);
+
+    const fileInput = screen.getByLabelText(/Upload dataset/i);
+    const badFile = new File(['bad content'], 'video.mp4', { type: 'video/mp4' });
+
+    fireEvent.change(fileInput, { target: { files: [badFile] } });
+
+    expect(alertMock).toHaveBeenCalledWith('Please upload a .csv, .xlsx, .xls, .json, or .pdf dataset.');
+    expect(screen.queryByText('video.mp4')).toBeNull();
+    alertMock.mockRestore();
+  });
+
+  it('handles file attachment and removal on Pipeline screen', async () => {
+    localStorage.setItem('helm.prefs.v2', JSON.stringify({ screen: 'pipeline' }));
+    stubApi();
+    renderApp();
+    await screen.findByText('Run the pipeline');
+
+    const fileInput = screen.getByLabelText(/Upload dataset for pipeline/i);
+    const file = new File(['[{"campaign_id": "c1"}]'], 'pipeline_data.json', {
+      type: 'application/json',
+    });
+
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('pipeline_data.json')).toBeTruthy();
+    });
+    expect(screen.getByText('Change dataset')).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle('Remove attachment'));
+    expect(screen.queryByText('pipeline_data.json')).toBeNull();
   });
 });
+
 
 describe('agent block grammar', () => {
   it('renders every block type the backend emits', () => {

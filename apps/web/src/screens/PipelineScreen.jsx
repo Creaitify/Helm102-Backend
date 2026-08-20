@@ -6,11 +6,12 @@
  * The run stops at the approval gate; nothing dispatches without a decision.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useHelm } from '../store';
 import { ContextBar } from '../components/Shell';
 import { Button, Chip, Icon, Spinner, formatINR } from '../components/ui';
+
 
 const HOPS = [
   { action: 'INGEST_OBJECTIVE', label: 'Objective', agent: 'Governor', icon: 'flag' },
@@ -27,11 +28,22 @@ const PRESETS = [
   'Prepare a quarterly optimization plan I can approve today',
 ];
 
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
 export function PipelineScreen() {
   const { run, runBusy, startRun, decideRun, set } = useHelm();
   const [objective, setObjective] = useState(PRESETS[0]);
   const [notes, setNotes] = useState('');
   const [pending, setPending] = useState([]);
+  const [attachment, setAttachment] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     api
@@ -39,6 +51,62 @@ export function PipelineScreen() {
       .then((runs) => setPending(runs.filter((r) => r.status === 'pending_approval')))
       .catch(() => {});
   }, [run?.status]);
+
+  const handleFile = (file) => {
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    const valid =
+      name.endsWith('.csv') ||
+      name.endsWith('.xlsx') ||
+      name.endsWith('.xls') ||
+      name.endsWith('.json') ||
+      name.endsWith('.pdf');
+    if (!valid) {
+      alert('Please upload a .csv, .xlsx, .xls, .json, or .pdf dataset.');
+      return;
+    }
+    if (file.size === 0) {
+      alert('The selected file is empty. Please upload a dataset or document with content.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setAttachment({
+        file,
+        filename: file.name,
+        file_content: e.target.result,
+        size: file.size,
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleFileSelect = (event) => {
+    const file = event.target.files?.[0];
+    if (file) handleFile(file);
+    event.target.value = '';
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    setDragging(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) handleFile(file);
+  };
+
+  const removeAttachment = () => {
+    setAttachment(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleStart = () => {
+    const obj =
+      objective.trim() ||
+      (attachment ? `Analyze and optimize ${attachment.filename || 'attached dataset'}` : '');
+    if (!obj || runBusy) return;
+    startRun(obj, attachment);
+    setAttachment(null);
+  };
 
   const resume = async (runId) => {
     try {
@@ -57,12 +125,36 @@ export function PipelineScreen() {
 
       <div className="p-4 sm:p-7 max-w-[1200px] space-y-6">
         {/* Launcher */}
-        <section className="card p-5">
+        <section
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            if (!e.currentTarget.contains(e.relatedTarget)) {
+              setDragging(false);
+            }
+          }}
+          onDrop={handleDrop}
+          className={`card p-5 transition-colors ${
+            dragging ? 'border-primary bg-primary/5 ring-2 ring-primary/20' : ''
+          }`}
+        >
           <h2 className="font-headline text-headline-md text-on-surface mb-1">Run the pipeline</h2>
           <p className="text-body-sm text-on-surface-variant mb-4">
-            State a business objective. The Governor routes it through every specialist and
+            State a business objective or attach a dataset (.csv, .xlsx, .xls, .json, .pdf). The Governor routes it through every specialist and
             assembles one proposal for you to approve.
           </p>
+
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            accept=".csv,.xlsx,.xls,.json,.pdf,text/csv,application/json,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            className="hidden"
+            aria-label="Upload dataset for pipeline"
+          />
 
           <textarea
             value={objective}
@@ -70,8 +162,34 @@ export function PipelineScreen() {
             rows={2}
             aria-label="Objective"
             className="w-full resize-none rounded-lg border border-outline-variant/50 bg-surface-container-lowest px-3.5 py-2.5 text-body-md text-on-surface placeholder:text-outline focus-ring focus:border-primary/50"
-            placeholder="e.g. Reduce CPA and scale winning campaigns"
+            placeholder={
+              attachment
+                ? `Run pipeline on ${attachment.filename}…`
+                : 'e.g. Reduce CPA and scale winning campaigns'
+            }
           />
+
+          {/* Attachment chip */}
+          {attachment && (
+            <div className="flex items-center gap-2 mt-3 px-3 py-1.5 rounded-lg bg-surface-container-highest border border-outline-variant/60 w-fit max-w-full shadow-sm">
+              <Icon name="attach_file" size={16} className="text-primary shrink-0" />
+              <span className="font-mono text-body-sm text-on-surface truncate">
+                {attachment.filename}
+              </span>
+              <span className="rail-label text-[11px] text-on-surface-variant">
+                ({formatBytes(attachment.size)})
+              </span>
+              <button
+                type="button"
+                onClick={removeAttachment}
+                className="p-1 rounded-md text-outline hover:text-error hover:bg-surface-container transition-colors ml-1 focus-ring"
+                title="Remove attachment"
+                aria-label="Remove attachment"
+              >
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+          )}
 
           <div className="flex flex-wrap gap-2 mt-3">
             {PRESETS.map((preset) => (
@@ -85,15 +203,26 @@ export function PipelineScreen() {
             ))}
           </div>
 
-          <Button
-            icon="rocket_launch"
-            className="mt-4"
-            disabled={!objective.trim() || runBusy}
-            onClick={() => startRun(objective)}
-          >
-            {runBusy ? 'Running…' : 'Start pipeline'}
-          </Button>
+          <div className="flex items-center gap-3 mt-4">
+            <Button
+              icon="rocket_launch"
+              disabled={(!objective.trim() && !attachment) || runBusy}
+              onClick={handleStart}
+            >
+              {runBusy ? 'Running…' : 'Start pipeline'}
+            </Button>
+            <Button
+              variant="outline"
+              icon="attach_file"
+              disabled={runBusy}
+              onClick={() => fileInputRef.current?.click()}
+              title="Attach dataset (.csv, .xlsx, .xls, .json)"
+            >
+              {attachment ? 'Change dataset' : 'Attach dataset'}
+            </Button>
+          </div>
         </section>
+
 
         {/* Other runs waiting on a decision */}
         {pending.length > 0 && !run && (

@@ -90,3 +90,40 @@ Integrity mode: development
 - [x] Pytest suite passes all tests including dedicated messy dataset tests.
 - [x] Vitest suite passes all 21 frontend tests.
 - [x] Frontend builds cleanly with Vite (`npm run build`).
+
+## 2026-08-19T12:36:24Z
+
+This is a single self-contained fix; keep it small and focused.
+
+Implement an agent-side file attachment interface in both the Agent Console and Pipeline launcher, enabling operators to upload/attach datasets (.csv, .xlsx, .json) directly when interacting with agents. Automatically activate the uploaded data as the primary BYOD dataset (bypassing synthetic data), and configure resilient background execution with streaming/polling so agent runs can proceed indefinitely without timing out.
+
+Working directory: c:\Users\Admin\OneDrive\Desktop\HELM-102-BACKEND-V2\Helm102-Backend
+Integrity mode: development
+
+## Requirements
+
+### R1. Agent Console & Pipeline File Attachment Interface
+- Add an intuitive inline file attachment button (with drag-and-drop support) to the input bar in both the Agent Console (AgentsScreen.jsx) and the Pipeline run launcher (PipelineScreen.jsx).
+- Support .csv, .xlsx, .xls, and .json files, displaying an attachment chip with filename and remove action before submission.
+
+### R2. Seamless BYOD Auto-Activation
+- When a prompt is submitted with an attached file, the backend immediately parses and activates the dataset as the active byod data source.
+- All subsequent agent reasoning (Analyst diagnostics, Governor plan formulation, Creative copy generation, Media Buyer budget allocation) executes against the imported dataset, bypassing synthetic data.
+
+### R3. Timeout-Free Resilient Execution
+- Ensure long-running agent tasks and Governor pipeline runs execute asynchronously with live polling / resilient streaming.
+- Remove hard HTTP client timeouts on agent invocation paths so execution continues cleanly until the model returns its full response.
+
+## Acceptance Criteria
+
+### UI / UX
+- [ ] The Agent Console and Pipeline launcher have an attachment button (paperclip/upload icon) and support drag-and-drop file attachment.
+- [ ] Selected file displays a clear pill/chip showing the filename and a remove button before sending.
+
+### Data Ingestion & Context Switching
+- [ ] Submitting a prompt with a file automatically parses the file and switches the backend data source to byod.
+- [ ] Agent responses directly reflect the metrics, campaigns, and platforms contained in the uploaded file.
+
+### Execution & Timeout
+- [ ] Agent and Governor tasks run to completion regardless of duration without throwing timeout exceptions.
+- [ ] Live progress state and final responses render seamlessly in the UI.

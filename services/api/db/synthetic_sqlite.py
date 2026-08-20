@@ -114,8 +114,13 @@ _COMPLIANT_TEXT = (
 def get_db_connection() -> sqlite3.Connection:
     """Ensure directory exists and connect to synthetic SQLite database."""
     os.makedirs(os.path.dirname(os.path.abspath(SQLITE_SYNTHETIC_DB_PATH)), exist_ok=True)
-    conn = sqlite3.connect(SQLITE_SYNTHETIC_DB_PATH)
+    conn = sqlite3.connect(SQLITE_SYNTHETIC_DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+    except Exception:
+        pass
     return conn
 
 

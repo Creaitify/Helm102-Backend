@@ -107,9 +107,13 @@ function SystemPanel({ health }) {
 
       {health.gateway_mode === 'replay' ? (
         <Note icon="warning" tone="warn">
-          No Anthropic API key is reachable, so agent reasoning is unavailable and narratives fall
+          No LLM API key is reachable, so agent reasoning is unavailable and narratives fall
           back to deterministic templates. Metrics, compliance verdicts, and budget math are still
           computed for real. Set{' '}
+          <code className="font-mono text-[11px] bg-surface-container px-1 py-0.5 rounded">
+            GEMINI_API_KEY
+          </code>{' '}
+          or{' '}
           <code className="font-mono text-[11px] bg-surface-container px-1 py-0.5 rounded">
             ANTHROPIC_API_KEY
           </code>{' '}
@@ -117,9 +121,8 @@ function SystemPanel({ health }) {
         </Note>
       ) : (
         <Note icon="auto_awesome">
-          Agents reason with Claude on every task — no cheaper tier is substituted. The model is
-          fixed by design: HELM&apos;s outputs drive real budget decisions, so the choice is not a
-          per-request setting.
+          Agents reason with {health.active_provider === 'gemini' ? 'Google Gemini' : 'Claude'} on every task — no cheaper tier is substituted. The model ({health.active_model}) is
+          governed: HELM&apos;s outputs drive real budget decisions within statutory guardrails.
         </Note>
       )}
       {!health.dry_run && (

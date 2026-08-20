@@ -73,8 +73,12 @@
   - 07 Audit Trail (Immutable cryptographic envelope timeline)
 - [x] Non-vanishing persistent state store (`HelmStore.jsx` with `localStorage` sync) ensuring active runs and reports never vanish when switching between agent workspaces.
 - [x] SQLite Synthetic Data Generator (`services/api/db/synthetic_sqlite.py`) producing coherent multi-channel metrics with CTR decay, ROAS variances, and fatigue signals.
-- [x] Full automated test suite: **168 passed in 4.01s with 0 failures**
-- [x] **Independent Victory Audit:** VICTORY CONFIRMED by `teamwork_preview_victory_auditor` (Handoff report: `.agents/sentinel/handoff.md`)
+### Phase 7: Agent-Side File Attachment, BYOD Auto-Activation & Resilient Execution
+- [x] Agent Console, Pipeline & Data Sources file attachments (drag & drop / file selector for `.csv`, `.xlsx`, `.xls`, `.json`, `.pdf`) in `AgentsScreen.jsx`, `PipelineScreen.jsx`, and `DataSourcesScreen.jsx`.
+- [x] PDF Campaign and Narrative Ingestion (`parse_pdf` in `modules/ads/byod_importer.py` using `pypdf` with text layer extraction and regex fallback) automatically deriving campaigns, spend, ROAS, conversions, and embedding grounding notes.
+- [x] Backend auto-activation of BYOD datasets on agent invocation (`/api/agents/{agent_id}/invoke`, `/api/chat`, `/api/runs`), dropping synthetic data connection and routing agents exclusively to uploaded data.
+- [x] Resilient background execution and streaming without client-side timeouts.
+- [x] Full automated test suite: **276 backend tests + 27 frontend tests passing cleanly with 0 errors**.
 
 ---
 
@@ -84,3 +88,4 @@
 3. **Connector Protocol Boundary:** `modules/ads/` is the **only** module permitted to `import mureo`.
 4. **No Fabricated Data:** Failing nodes mark runs as `degraded` rather than returning canned success fixtures.
 5. **Human Approval Before Execution:** Write paths are strictly gated behind explicit human sign-off with preview.
+6. **Automatic BYOD Precedence:** When datasets are attached or uploaded, all agents immediately analyze the uploaded dataset, dropping the synthetic baseline.

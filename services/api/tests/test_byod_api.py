@@ -262,4 +262,121 @@ def test_byod_upload_messy_multichannel_dataset(client: TestClient):
     clear_active_byod_snapshot()
 
 
+def _make_test_pdf(text: str) -> bytes:
+    escaped = text.replace("(", "\\(").replace(")", "\\)")
+    stream = f"BT\n/F1 12 Tf\n72 712 Td\n({escaped}) Tj\nET\n"
+    stream_bytes = stream.encode("latin1")
+    stream_len = len(stream_bytes)
+    pdf = f"""%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length {stream_len} >>
+stream
+{stream}endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000227 00000 n 
+0000000300 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+370
+%%EOF"""
+    return pdf.encode("latin1")
+
+
+def test_byod_pdf_parsing_and_metrics_extraction():
+    from modules.ads.byod_importer import parse_pdf
+
+    raw_pdf = _make_test_pdf(
+        "Campaign: Diwali Search Max Spend: 95000 ROAS: 4.35 Clicks: 4200 Conversions: 240"
+    )
+    snap = parse_pdf(raw_pdf)
+    assert len(snap.campaigns) >= 1
+    c = snap.campaigns[0]
+    assert "Diwali Search Max" in c.campaign_name
+    assert c.spend_inr == 95000.0
+    assert c.roas == 4.35
+    assert c.clicks == 4200
+    assert c.conversions == 240
+    assert snap.total_spend_inr == 95000.0
+
+
+def test_byod_upload_pdf_endpoint(client: TestClient):
+    clear_active_byod_snapshot()
+
+    raw_pdf = _make_test_pdf(
+        "Campaign: Mutual Funds PMax Spend: 120000 ROAS: 3.8 Clicks: 5000 Conversions: 300"
+    )
+    b64_pdf = "data:application/pdf;base64," + base64.b64encode(raw_pdf).decode("utf-8")
+
+    resp = client.post(
+        "/api/byod/upload",
+        json={
+            "file_content": b64_pdf,
+            "filename": "q4_campaign_summary.pdf",
+            "activate": True,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["campaign_count"] >= 1
+    assert data["total_spend_inr"] == 120000.0
+    assert has_active_byod_snapshot() is True
+
+    # Direct agent invocation uses active BYOD
+    analyst_resp = client.post(
+        "/api/agents/analyst/invoke",
+        json={"prompt": "Analyze our Q4 PDF report performance"},
+    )
+    assert analyst_resp.status_code == 200
+    analyst_data = analyst_resp.json()
+    assert analyst_data["meta"]["data_source"] == "byod"
+    assert analyst_data["raw"]["account_kpis"]["total_spend_inr"] == 120000.0
+
+    clear_active_byod_snapshot()
+
+
+def test_agent_invoke_with_attached_pdf(client: TestClient):
+    clear_active_byod_snapshot()
+
+    raw_pdf = _make_test_pdf(
+        "Campaign: Retargeting Video Boost Spend: 65000 ROAS: 2.9 Clicks: 2800 Conversions: 140"
+    )
+    b64_pdf = "data:application/pdf;base64," + base64.b64encode(raw_pdf).decode("utf-8")
+
+    resp = client.post(
+        "/api/agents/creative/invoke",
+        json={
+            "prompt": "Write new ad copy based on this attached campaign PDF",
+            "file_content": b64_pdf,
+            "filename": "brief.pdf",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["agent"] == "creative"
+    assert has_active_byod_snapshot() is True
+    assert get_active_byod_snapshot().total_spend_inr == 65000.0
+
+    clear_active_byod_snapshot()
+
+
 

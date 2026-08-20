@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
-DB_PATH = os.environ.get("HELM_REPORTS_DB", "helm_reports.sqlite")
+_DEFAULT_DB = os.path.join(os.path.dirname(__file__), "data", "helm_reports.sqlite")
+DB_PATH = os.environ.get("HELM_REPORTS_DB", _DEFAULT_DB)
 
 _lock = threading.Lock()
 _deps: dict[str, Any] = {}
@@ -44,8 +45,14 @@ def configure(gateway: Any, connector: Any) -> None:
 
 
 def _connect() -> sqlite3.Connection:
+    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+    except Exception:
+        pass
     return conn
 
 

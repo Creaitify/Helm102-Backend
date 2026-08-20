@@ -21,8 +21,17 @@ class AuditTrail:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
+    def _get_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=5000;")
+        except Exception:
+            pass
+        return conn
+
     def _init_db(self) -> None:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         try:
             with conn:
                 conn.execute("""
@@ -47,7 +56,7 @@ class AuditTrail:
     def record(self, run_id: str, envelope: HandoffEnvelope) -> None:
         """Append an envelope to the immutable log."""
         payload_json = json.dumps(envelope.payload)
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         try:
             with conn:
                 conn.execute("""
@@ -71,7 +80,7 @@ class AuditTrail:
 
     def get_trail(self, run_id: str) -> list[dict[str, Any]]:
         """Retrieve full chronological trail for a run."""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         try:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()

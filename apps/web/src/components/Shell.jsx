@@ -106,7 +106,11 @@ export function Sidebar() {
                   }`}
                 />
                 <span className="font-mono text-[10px] text-white/70 uppercase tracking-wider">
-                  {health.gateway_mode === 'live' ? 'Claude connected' : 'Replay mode'}
+                  {health.gateway_mode === 'live'
+                    ? health.active_provider === 'gemini'
+                      ? 'Gemini connected'
+                      : 'Claude connected'
+                    : 'Replay mode'}
                 </span>
               </div>
               <p className="font-mono text-[10px] text-white/40 truncate">{health.active_model}</p>

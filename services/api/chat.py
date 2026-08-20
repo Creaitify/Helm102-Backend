@@ -66,6 +66,8 @@ class ChatRequest(BaseModel):
     mode: str = Field(default="pipeline")
     conversation_id: str | None = Field(default=None)
     grounded: bool = Field(default=True)
+    file_content: str | None = Field(default=None, description="Raw text or base64 string of attached dataset")
+    filename: str | None = Field(default=None, description="Original filename of attached dataset")
 
 
 @router.get("/modes")
@@ -108,10 +110,15 @@ async def send_message(req: ChatRequest) -> dict[str, Any]:
         envelope = await agents.invoke_agent(
             agent_id,
             agents.AgentInvokeRequest(
-                prompt=prompt, conversation_id=conversation_id, grounded=req.grounded
+                prompt=prompt,
+                conversation_id=conversation_id,
+                grounded=req.grounded,
+                file_content=req.file_content,
+                filename=req.filename,
             ),
         )
     except HTTPException as exc:
+
         # Persist the failure so the thread reflects what actually happened.
         error_message = conversations.append_message(
             conversation_id=conversation_id,

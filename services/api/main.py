@@ -90,6 +90,8 @@ class StartRunRequest(BaseModel):
         default=False,
         description="true = block until the proposal is ready; false = return run_id immediately and stream progress via GET /api/runs/{run_id}",
     )
+    file_content: str | None = Field(default=None, description="Raw text or base64 string of attached dataset (.csv, .xlsx, .xls, .json)")
+    filename: str | None = Field(default=None, description="Original filename of attached dataset")
 
 
 class ApprovalRequest(BaseModel):
@@ -162,6 +164,19 @@ async def create_run(req: StartRunRequest) -> dict[str, Any]:
     executes in the background, checkpointing after every hop. The console
     polls GET /api/runs/{run_id} to render live agent progress.
     """
+    if req.file_content:
+        from modules.ads.byod_importer import activate_byod_file
+        try:
+            snapshot = activate_byod_file(req.file_content, filename=req.filename)
+            logger.info(
+                "Auto-activated BYOD dataset '%s' with %d campaigns for Governor run",
+                req.filename or "attachment",
+                len(snapshot.campaigns),
+            )
+        except Exception as exc:
+            logger.error("Failed to parse attached dataset for run: %s", exc)
+            raise HTTPException(status_code=400, detail=f"Failed to process attached dataset: {exc}") from exc
+
     if req.wait:
         try:
             return await orchestrator.start_run(objective=req.objective)
@@ -231,8 +246,7 @@ async def stream_run_events(run_id: str):
     async def event_stream():
         last_payload: str | None = None
         beats_since_send = 0
-        # 1200 * 250ms = 5 min hard cap so orphaned streams always close.
-        for _ in range(1200):
+        while True:
             state = await asyncio.to_thread(checkpointer.load_checkpoint, run_id)
             if state:
                 payload = _json.dumps(state, separators=(",", ":"))
@@ -243,18 +257,20 @@ async def stream_run_events(run_id: str):
                     if state.get("status") in _SETTLED_STATUSES:
                         yield f"event: done\ndata: {_json.dumps({'status': state['status']})}\n\n"
                         return
+            else:
+                return
             beats_since_send += 1
             if beats_since_send >= 60:  # 15s heartbeat keeps proxies from closing us
                 beats_since_send = 0
                 yield ": heartbeat\n\n"
             await asyncio.sleep(0.25)
-        yield "event: timeout\ndata: {}\n\n"
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
 
 
 @app.post("/api/runs/{run_id}/approval")
@@ -373,22 +389,8 @@ def parse_byod_csv(req: ByodUploadRequest) -> dict[str, Any]:
 def upload_byod_file(req: ByodFileUploadRequest) -> dict[str, Any]:
     """Upload and parse a CSV, Excel (.xlsx, .xls), or JSON dataset."""
     try:
-        raw_bytes: bytes
-        content_str = req.file_content.strip()
-        if content_str.startswith("data:") and ";base64," in content_str:
-            content_str = content_str.split(";base64,")[1]
-
-        # Try base64 decoding first
-        try:
-            decoded = base64.b64decode(content_str)
-            # If the decoded string starts with JSON / XML / PK or CSV header
-            if req.filename.lower().endswith((".xlsx", ".xls")) or decoded.startswith((b"PK", b"{", b"[")) or b"," in decoded[:200]:
-                raw_bytes = decoded
-            else:
-                raw_bytes = req.file_content.encode("utf-8")
-        except Exception:
-            raw_bytes = req.file_content.encode("utf-8")
-
+        from modules.ads.byod_importer import decode_byod_content
+        raw_bytes = decode_byod_content(req.file_content, filename=req.filename)
         snapshot = import_byod_file(raw_bytes, filename=req.filename)
         if req.activate:
             set_active_byod_snapshot(snapshot)

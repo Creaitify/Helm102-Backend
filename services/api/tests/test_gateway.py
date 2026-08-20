@@ -255,3 +255,56 @@ async def test_gemini_adapter_missing_api_key(monkeypatch):
         await adapter.generate(req, ModelRef(provider="gemini", model="gemini-2.5-flash"))
 
 
+@pytest.mark.asyncio
+async def test_anthropic_adapter_payload_generation_and_cost():
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from services.api.gateway.adapters.anthropic import AnthropicAdapter
+    from services.api.gateway.contracts import ModelRef, StopReason
+
+    adapter = AnthropicAdapter(api_key="test-anthropic-key")
+    req = CompletionRequest(
+        task=TaskKind.ANALYST_ANSWER,
+        messages=[
+            Message(role=Role.USER, content="Analyze portfolio ROAS."),
+        ],
+        system_cacheable="You are a certified performance analyst.",
+        max_tokens=1024,
+        request_id="req-claude-test",
+    )
+
+    mock_block = MagicMock()
+    mock_block.type = "text"
+    mock_block.text = "ROAS is performing strongly across search campaigns."
+
+    mock_msg = MagicMock()
+    mock_msg.id = "msg_123"
+    mock_msg.model = "claude-opus-5"
+    mock_msg.content = [mock_block]
+    mock_msg.stop_reason = "end_turn"
+    mock_usage = MagicMock()
+    mock_usage.input_tokens = 500
+    mock_usage.output_tokens = 100
+    mock_usage.cache_read_input_tokens = 200
+    mock_usage.cache_creation_input_tokens = 50
+    mock_msg.usage = mock_usage
+
+    mock_stream = AsyncMock()
+    mock_stream.get_final_message.return_value = mock_msg
+
+    mock_client = MagicMock()
+    mock_client.messages.stream.return_value.__aenter__.return_value = mock_stream
+
+    with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+        model = ModelRef(provider="anthropic", model="claude-opus-5")
+        resp = await adapter.generate(req, model)
+
+        assert resp.content == "ROAS is performing strongly across search campaigns."
+        assert resp.stop_reason == StopReason.END_TURN
+        assert resp.model == model
+        assert resp.usage.input_tokens == 500
+        assert resp.usage.output_tokens == 100
+        assert resp.usage.cost_microdollars > 0
+        assert resp.request_id == "req-claude-test"
+
+
+

@@ -137,27 +137,37 @@ export function HelmProvider({ children }) {
   // --- Individual agents -------------------------------------------
 
   const askAgent = useCallback(
-    async (agentId, prompt) => {
-      const text = String(prompt || '').trim();
+    async (agentId, prompt, attachment = null) => {
+      const text = String(prompt || '').trim() || (attachment ? `Analyze dataset from ${attachment.filename || attachment.name}` : '');
       if (!text || state.agentBusy) return;
+
+      const attachmentName = attachment?.filename || attachment?.name;
 
       dispatch({
         type: 'agent:append',
         agent: agentId,
         entries: [
-          { kind: 'question', text, at: new Date().toISOString() },
+          { kind: 'question', text, attachmentName, at: new Date().toISOString() },
           { kind: 'pending', at: new Date().toISOString() },
         ],
       });
       set({ agentBusy: agentId, error: null });
 
       try {
-        const envelope = await api.invokeAgent(agentId, { prompt: text, grounded: true });
+        const envelope = await api.invokeAgent(agentId, {
+          prompt: text,
+          grounded: true,
+          file_content: attachment?.file_content || attachment?.fileContent || attachment?.content,
+          filename: attachmentName,
+        });
         dispatch({
           type: 'agent:replaceLast',
           agent: agentId,
           entry: { kind: 'answer', envelope, at: new Date().toISOString() },
         });
+        if (attachment) {
+          refreshOverview();
+        }
       } catch (err) {
         dispatch({
           type: 'agent:replaceLast',
@@ -168,7 +178,7 @@ export function HelmProvider({ children }) {
         set({ agentBusy: null });
       }
     },
-    [state.agentBusy, set],
+    [state.agentBusy, set, refreshOverview],
   );
 
   const clearAgent = useCallback((agentId) => dispatch({ type: 'agent:clear', agent: agentId }), []);
@@ -176,19 +186,24 @@ export function HelmProvider({ children }) {
   // --- Pipeline -----------------------------------------------------
 
   const startRun = useCallback(
-    async (objective) => {
-      const text = String(objective || '').trim();
+    async (objective, attachment = null) => {
+      const text =
+        String(objective || '').trim() ||
+        (attachment ? `Analyze and optimize ${attachment.filename || attachment.name || 'attached dataset'}` : '');
       if (!text || state.runBusy) return;
 
       set({ runBusy: true, error: null, run: null });
       try {
-        const started = await api.startRun(text, false);
+        const started = await api.startRun(text, false, attachment);
         set({ run: { ...started, hops: [], objective: text } });
+        if (attachment) {
+          refreshOverview();
+        }
       } catch (err) {
         set({ runBusy: false, error: err.message });
       }
     },
-    [state.runBusy, set],
+    [state.runBusy, set, refreshOverview],
   );
 
   const decideRun = useCallback(
@@ -221,21 +236,31 @@ export function HelmProvider({ children }) {
   // id + status only, so each poll result doesn't respawn the interval.
   const runId = state.run?.run_id;
   const runStatus = state.run?.status;
+  const pollFailures = useRef(0);
   useEffect(() => {
     clearInterval(pollRef.current);
+    pollFailures.current = 0;
     if (!runId || !['running', 'interrupted'].includes(runStatus)) return undefined;
 
     pollRef.current = setInterval(async () => {
       try {
         const fresh = await api.getRun(runId);
+        pollFailures.current = 0;
         set({ run: fresh, runBusy: fresh.status === 'running' });
+        if (['completed', 'rejected', 'failed', 'pending_approval'].includes(fresh.status)) {
+          clearInterval(pollRef.current);
+        }
       } catch {
-        clearInterval(pollRef.current);
-        set({ runBusy: false });
+        pollFailures.current += 1;
+        if (pollFailures.current > 15) {
+          clearInterval(pollRef.current);
+          set({ runBusy: false });
+        }
       }
     }, 1000);
     return () => clearInterval(pollRef.current);
   }, [runId, runStatus, set]);
+
 
   useEffect(() => {
     if (!state.toast) return undefined;

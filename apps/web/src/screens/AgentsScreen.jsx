@@ -133,10 +133,21 @@ function AgentCard({ agent, active, onSelect }) {
   );
 }
 
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
 function AgentConsole({ agent }) {
   const { agentThreads, agentBusy, askAgent, clearAgent } = useHelm();
   const thread = agentThreads[agent.id] || [];
   const [draft, setDraft] = useState('');
+  const [attachment, setAttachment] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef(null);
   const endRef = useRef(null);
   const accent = ACCENTS[agent.id] || ACCENTS.analyst;
   const busy = agentBusy === agent.id;
@@ -145,11 +156,59 @@ function AgentConsole({ agent }) {
     if (thread.length) endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [thread.length, busy]);
 
+  const handleFile = (file) => {
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    const valid =
+      name.endsWith('.csv') ||
+      name.endsWith('.xlsx') ||
+      name.endsWith('.xls') ||
+      name.endsWith('.json') ||
+      name.endsWith('.pdf');
+    if (!valid) {
+      alert('Please upload a .csv, .xlsx, .xls, .json, or .pdf dataset.');
+      return;
+    }
+    if (file.size === 0) {
+      alert('The selected file is empty. Please upload a dataset or document with content.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setAttachment({
+        file,
+        filename: file.name,
+        file_content: e.target.result,
+        size: file.size,
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleFileSelect = (event) => {
+    const file = event.target.files?.[0];
+    if (file) handleFile(file);
+    event.target.value = '';
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    setDragging(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) handleFile(file);
+  };
+
+  const removeAttachment = () => {
+    setAttachment(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
   const submit = (event) => {
     event?.preventDefault();
-    if (!draft.trim() || busy) return;
-    askAgent(agent.id, draft);
+    if ((!draft.trim() && !attachment) || busy) return;
+    askAgent(agent.id, draft, attachment);
     setDraft('');
+    setAttachment(null);
   };
 
   return (
@@ -169,30 +228,32 @@ function AgentConsole({ agent }) {
         )}
       </header>
 
-      {/* One-click tasks */}
-      <div className="px-5 py-4 border-b border-outline-variant/30 bg-surface-container-low/50">
-        <p className="rail-label mb-2.5">Run a task</p>
-        <div className="flex flex-wrap gap-2">
-          {(TASKS[agent.id] || []).map((task) => (
-            <button
-              key={task}
-              disabled={busy}
-              onClick={() => askAgent(agent.id, task)}
-              className="px-3 py-1.5 rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-body-sm text-on-surface-variant hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-ring text-left max-w-full"
-            >
-              <span className="line-clamp-1">{task}</span>
-            </button>
-          ))}
+      {/* Suggested prompts */}
+      {thread.length === 0 && (
+        <div className="p-5 border-b border-outline-variant/30 bg-surface-container-low/30">
+          <p className="rail-label mb-2">One-click tasks</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {(TASKS[agent.id] || []).map((task) => (
+              <button
+                key={task}
+                onClick={() => askAgent(agent.id, task)}
+                disabled={busy}
+                className="text-left text-body-sm p-3 rounded-lg border border-outline-variant/40 bg-surface hover:border-primary hover:bg-primary/5 transition-all text-on-surface focus-ring"
+              >
+                {task}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Transcript */}
-      <div className="px-5 py-5 min-h-[260px] max-h-[62vh] overflow-y-auto">
+      <div className="p-5 min-h-[300px] max-h-[550px] overflow-y-auto">
         {thread.length === 0 ? (
           <EmptyState
             icon={agent.icon}
             title={`${agent.label} is ready`}
-            body="Pick a task above, or ask something specific below."
+            description={`Pick a one-click task above, attach a dataset (.csv, .xlsx, .json, .pdf), or type an objective below.`}
           />
         ) : (
           <div className="space-y-7">
@@ -207,22 +268,85 @@ function AgentConsole({ agent }) {
       {/* Composer */}
       <form
         onSubmit={submit}
-        className="px-5 py-4 border-t border-outline-variant/40 bg-surface-container-low/40 flex items-end gap-2"
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          if (!e.currentTarget.contains(e.relatedTarget)) {
+            setDragging(false);
+          }
+        }}
+        onDrop={handleDrop}
+        className={`px-5 py-4 border-t border-outline-variant/40 bg-surface-container-low/40 transition-colors ${
+          dragging ? 'bg-primary/10 border-primary ring-2 ring-primary/20' : ''
+        }`}
       >
-        <textarea
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) submit(event);
-          }}
-          rows={agent.id === 'compliance' ? 3 : 1}
-          placeholder={PLACEHOLDERS[agent.id] || 'Ask this agent…'}
-          aria-label={`Ask ${agent.label}`}
-          className="flex-1 resize-none rounded-lg border border-outline-variant/50 bg-surface-container-lowest px-3.5 py-2.5 text-body-md text-on-surface placeholder:text-outline focus-ring focus:border-primary/50 max-h-40"
-        />
-        <Button type="submit" icon={busy ? undefined : 'send'} disabled={!draft.trim() || busy}>
-          {busy ? <Spinner /> : 'Ask'}
-        </Button>
+        {/* Attachment chip */}
+        {attachment && (
+          <div className="flex items-center gap-2 mb-3 px-3 py-1.5 rounded-lg bg-surface-container-highest border border-outline-variant/60 w-fit max-w-full shadow-sm">
+            <Icon name="attach_file" size={16} className="text-primary shrink-0" />
+            <span className="font-mono text-body-sm text-on-surface truncate">
+              {attachment.filename}
+            </span>
+            <span className="rail-label text-[11px] text-on-surface-variant">
+              ({formatBytes(attachment.size)})
+            </span>
+            <button
+              type="button"
+              onClick={removeAttachment}
+              className="p-1 rounded-md text-outline hover:text-error hover:bg-surface-container transition-colors ml-1 focus-ring"
+              title="Remove attachment"
+              aria-label="Remove attachment"
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+        )}
+
+        <div className="flex items-end gap-2">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            accept=".csv,.xlsx,.xls,.json,.pdf,text/csv,application/json,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            className="hidden"
+            aria-label="Upload dataset or document"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy}
+            title="Attach dataset or document (.csv, .xlsx, .xls, .json, .pdf)"
+            aria-label="Attach dataset or document"
+            className="p-2.5 rounded-lg border border-outline-variant/50 bg-surface-container-lowest text-on-surface-variant hover:text-primary hover:border-primary/50 transition-colors focus-ring shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Icon name="attach_file" size={20} />
+          </button>
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) submit(event);
+            }}
+            rows={agent.id === 'compliance' ? 3 : 1}
+            placeholder={
+              attachment
+                ? `Ask ${agent.label} about ${attachment.filename}…`
+                : (PLACEHOLDERS[agent.id] || 'Ask this agent…')
+            }
+            aria-label={`Ask ${agent.label}`}
+            className="flex-1 resize-none rounded-lg border border-outline-variant/50 bg-surface-container-lowest px-3.5 py-2.5 text-body-md text-on-surface placeholder:text-outline focus-ring focus:border-primary/50 max-h-40"
+          />
+          <Button
+            type="submit"
+            icon={busy ? undefined : 'send'}
+            disabled={(!draft.trim() && !attachment) || busy}
+          >
+            {busy ? <Spinner /> : 'Ask'}
+          </Button>
+        </div>
       </form>
     </section>
   );
@@ -235,13 +359,22 @@ function Entry({ entry, agent, accent }) {
         <span className="w-6 h-6 rounded-full bg-surface-container grid place-items-center shrink-0 mt-0.5">
           <Icon name="person" size={14} className="text-on-surface-variant" />
         </span>
-        <p className="text-body-md text-on-surface font-medium leading-relaxed flex-1">
-          {entry.text}
-        </p>
+        <div className="flex-1 min-w-0">
+          <p className="text-body-md text-on-surface font-medium leading-relaxed">
+            {entry.text}
+          </p>
+          {entry.attachmentName && (
+            <div className="inline-flex items-center gap-1.5 mt-1.5 px-2.5 py-1 rounded-md bg-surface-container border border-outline-variant/40 text-body-sm text-on-surface-variant">
+              <Icon name="attach_file" size={14} className="text-primary shrink-0" />
+              <span className="font-mono text-xs truncate">{entry.attachmentName}</span>
+            </div>
+          )}
+        </div>
         <span className="rail-label shrink-0 pt-1">{formatTime(entry.at)}</span>
       </div>
     );
   }
+
 
   if (entry.kind === 'pending') {
     return (

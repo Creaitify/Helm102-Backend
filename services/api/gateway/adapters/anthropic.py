@@ -45,11 +45,20 @@ _ADAPTIVE_THINKING_PREFIXES = (
     "claude-mythos-5",
 )
 
+_EXTENDED_THINKING_PREFIXES = (
+    "claude-3-7",
+    "claude-3.7",
+)
+
 _EFFORT_VALUES = {"low", "medium", "high", "xhigh", "max"}
 
 
 def _is_adaptive_model(model_id: str) -> bool:
     return any(model_id.startswith(prefix) for prefix in _ADAPTIVE_THINKING_PREFIXES)
+
+
+def _supports_extended_thinking(model_id: str) -> bool:
+    return any(model_id.startswith(prefix) for prefix in _EXTENDED_THINKING_PREFIXES)
 
 
 class AnthropicAdapter:
@@ -117,8 +126,8 @@ class AnthropicAdapter:
         if _is_adaptive_model(model.model):
             # Adaptive thinking; `budget_tokens` and `temperature` are 400s here.
             kwargs["thinking"] = {"type": "adaptive"}
-        elif request.effort in (Effort.HIGH, Effort.XHIGH, Effort.MAX):
-            # Older models still take an explicit thinking budget.
+        elif _supports_extended_thinking(model.model) and request.effort in (Effort.HIGH, Effort.XHIGH, Effort.MAX):
+            # Explicit thinking budget (e.g. Claude 3.7 Sonnet)
             budget = max(1024, min(request.max_tokens - 1, 4096))
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
 

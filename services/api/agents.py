@@ -85,6 +85,8 @@ class AgentInvokeRequest(BaseModel):
     prompt: str = Field(..., json_schema_extra={"example": "Analyze Meta campaign performance for the last 30 days"})
     conversation_id: str | None = Field(default=None)
     grounded: bool = Field(default=True, description="Attach source citations to the answer.")
+    file_content: str | None = Field(default=None, description="Raw text or base64 string of attached dataset (.csv, .xlsx, .xls, .json)")
+    filename: str | None = Field(default=None, description="Original filename of attached dataset")
 
 
 # ----------------------------------------------------------------------
@@ -132,6 +134,23 @@ async def invoke_agent(agent_id: str, req: AgentInvokeRequest) -> dict[str, Any]
     if not req.prompt.strip():
         raise HTTPException(status_code=400, detail="prompt must not be empty")
 
+    if req.file_content:
+        from modules.ads.byod_importer import activate_byod_file
+        try:
+            snapshot = activate_byod_file(req.file_content, filename=req.filename)
+            logger.info(
+                "Auto-activated BYOD dataset '%s' with %d campaigns for agent %s",
+                req.filename or "attachment",
+                len(snapshot.campaigns),
+                agent_id,
+            )
+        except Exception as exc:
+            logger.error("Failed to parse attached dataset for agent %s: %s", agent_id, exc)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to process attached dataset: {exc}",
+            ) from exc
+
     handlers = {
         "analyst": _run_analyst,
         "creative": _run_creative,
@@ -147,6 +166,7 @@ async def invoke_agent(agent_id: str, req: AgentInvokeRequest) -> dict[str, Any]
     except Exception as exc:
         logger.exception("Agent %s failed: %s", agent_id, exc)
         raise HTTPException(status_code=500, detail=f"{AGENT_REGISTRY[agent_id]['label']} failed: {exc}") from exc
+
 
 
 # ----------------------------------------------------------------------
